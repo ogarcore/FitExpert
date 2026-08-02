@@ -1,0 +1,158 @@
+{
+  "sessions": [
+    {
+      "user_id": "012818f3-d5f8-4f81-9bba-a3fd85a9c7bd",
+      "name": "papitomyrrei",
+      "age": 20,
+      "sex": "masculino",
+      "weight": 76.203456,
+      "height": 167.0,
+      "body_fat_pct": 0.0,
+      "activity_level": "sedentario",
+      "objective": "recomposicion",
+      "experience": "intermedio",
+      "training_place": "gimnasio",
+      "equipment": [],
+      "injuries": [
+        "hombro"
+      ],
+      "diet_type": "omnivoro",
+      "allergies": [],
+      "meal_frequency": 3,
+      "imc": 27.32,
+      "tmb": 1710.78,
+      "tdee": 2052.94,
+      "target_calories": 2052.94,
+      "imc_category": "Sobrepeso",
+      "conclusions": [
+        {
+          "id": "NUT-04",
+          "description": "Calorías de mantenimiento",
+          "conclusion": "Consumir las calorías equivalentes al TDEE.",
+          "category": "nutricion"
+        },
+        {
+          "id": "NUT-06",
+          "description": "Hidratación recomendada",
+          "conclusion": "Consumir entre 2 y 3 litros de agua diarios (mínimo 35 ml/kg de peso corporal).",
+          "category": "nutricion"
+        },
+        {
+          "id": "TRAIN-GYM-03",
+          "description": "Rutina gimnasio — intermedio",
+          "conclusion": "Rutina gimnasio: Split 4 días — Empuje / Jalar / Piernas / Cuerpo completo.",
+          "category": "entrenamiento"
+        },
+        {
+          "id": "LES-03",
+          "description": "Lesión de hombro — eliminar press y overhead",
+          "conclusion": "Lesión de hombro detectada: eliminar press militar y elevaciones sobre la cabeza. Sustituir por jalones y remo.",
+          "category": "lesión"
+        },
+        {
+          "id": "SEG-01",
+          "description": "Alerta sedentarismo con obesidad",
+          "conclusion": "Aumentar gradualmente el nivel de actividad física. Iniciar con caminatas diarias.",
+          "category": "seguimiento"
+        },
+        {
+          "id": "SEG-02",
+          "description": "Recomendación de seguimiento cada 4 semanas",
+          "conclusion": "Realizar mediciones de peso y composición corporal cada 4 semanas para evaluar progreso.",
+          "category": "seguimiento"
+        },
+        {
+          "id": "SEG-03",
+          "description": "Descanso y recuperación",
+          "conclusion": "Garantizar 7–9 horas de sueño por noche para optimizar la recuperación muscular.",
+          "category": "seguimiento"
+        },
+        {
+          "id": "SEG-05",
+          "description": "Cardio para usuarios con actividad sedentaria o ligera",
+          "conclusion": "Incorporar mínimo 150 minutos de actividad cardiovascular moderada por semana (OMS).",
+          "category": "seguimiento"
+        }
+      ],
+      "created_at": "2026-07-08 10:16",
+      "saved_at": "2026-07-08 10:16:52"
+    },
+    {
+      "user_id": "012818f3-d5f8-4f81-9bba-a3fd85a9c7bd",
+      "name": "papitomyrrei",
+      "age": 20,
+      "sex": "masculino",
+      "weight": 76.203456,
+      "height": 160.0,
+      "body_fat_pct": 0.0,
+      "activity_level": "sedentario",
+      "objective": "recomposicion",
+      "experience": "intermedio",
+      "training_place": "gimnasio",
+      "equipment": [],
+      "injuries": [
+        "hombro"
+      ],
+      "diet_type": "omnivoro",
+      "allergies": [],
+      "meal_frequency": 3,
+      "imc": 29.77,
+      "tmb": 1667.03,
+      "tdee": 2000.44,
+      "target_calories": 2000.44,
+      "imc_category": "Sobrepeso",
+      "conclusions": [
+        {
+          "id": "NUT-04",
+          "description": "Calorías de mantenimiento",
+          "conclusion": "Consumir las calorías equivalentes al TDEE.",
+          "category": "nutricion"
+        },
+        {
+          "id": "NUT-06",
+          "description": "Hidratación recomendada",
+          "conclusion": "Consumir entre 2 y 3 litros de agua diarios (mínimo 35 ml/kg de peso corporal).",
+          "category": "nutricion"
+        },
+        {
+          "id": "TRAIN-GYM-03",
+          "description": "Rutina gimnasio — intermedio",
+          "conclusion": "Rutina gimnasio: Split 4 días — Empuje / Jalar / Piernas / Cuerpo completo.",
+          "category": "entrenamiento"
+        },
+        {
+          "id": "LES-03",
+          "description": "Lesión de hombro — eliminar press y overhead",
+          "conclusion": "Lesión de hombro detectada: eliminar press militar y elevaciones sobre la cabeza. Sustituir por jalones y remo.",
+          "category": "lesión"
+        },
+        {
+          "id": "SEG-01",
+          "description": "Alerta sedentarismo con obesidad",
+          "conclusion": "Aumentar gradualmente el nivel de actividad física. Iniciar con caminatas diarias.",
+          "category": "seguimiento"
+        },
+        {
+          "id": "SEG-02",
+          "description": "Recomendación de seguimiento cada 4 semanas",
+          "conclusion": "Realizar mediciones de peso y composición corporal cada 4 semanas para evaluar progreso.",
+          "category": "seguimiento"
+        },
+        {
+          "id": "SEG-03",
+          "description": "Descanso y recuperación",
+          "conclusion": "Garantizar 7–9 horas de sueño por noche para optimizar la recuperación muscular.",
+          "category": "seguimiento"
+        },
+        {
+          "id": "SEG-05",
+          "description": "Cardio para usuarios con actividad sedentaria o ligera",
+          "conclusion": "Incorporar mínimo 150 minutos de actividad cardiovascular moderada por semana (OMS).",
+          "category": "seguimiento"
+        }
+      ],
+      "created_at": "2026-07-08 10:21",
+      "saved_at": "2026-07-08 10:21:13"
+    }
+  ]
+}
