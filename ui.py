@@ -1,15 +1,22 @@
 """
 ui.py
 =====
-Módulo de Interfaz de Usuario del Sistema Experto.
+Interfaz de consola (rich) de FitExpert — v3.0 (auditoría completa)
 
-Responsabilidades:
-  - Presentar menús y formularios en la consola usando `rich`.
-  - Recopilar datos del usuario con validación.
-  - Visualizar resultados, planes y explicaciones en tablas y paneles.
-  - Mostrar el módulo de explicación del motor de inferencia.
-
-Depende de: rich (pip install rich)
+Mejoras respecto a v2:
+  - Corrección del KeyError: las sesiones de entrenamiento exponen `dia/grupo`,
+    no `nombre` (contrato de training.generate_training_plan). Se muestra la
+    semana completa incluyendo días de descanso.
+  - El formulario recopila TODOS los campos del perfil: dieta, alergias,
+    intolerancias, preferencias, lesiones + severidad, señales de alarma,
+    problemas de equilibrio, % de grasa, equipamiento y observaciones.
+  - El formulario valida cada entrada con reglas de rango y mensajes amigables.
+  - Al final del formulario se ejecuta la validación cruzada
+    (validation.validate_evaluation) y se muestran las advertencias.
+  - Las conclusiones muestran severidad, tier, referencias y alternativa, y
+    se ordenan por severidad/jerarquía.
+  - Transparencia del motor: reglas suprimidas por conflicto y errores internos.
+  - Estadísticas con claves reales de db_stats.
 """
 
 import sys
@@ -21,23 +28,29 @@ from rich.text import Text
 from rich.columns import Columns
 from rich import box
 from rich.rule import Rule as RichRule
-from rich.style import Style
 
 from user_profile import (
     UserProfile, OBJECTIVES, OBJECTIVE_LABELS,
     ACTIVITY_LEVELS, ACTIVITY_LABELS,
     EXPERIENCE_LEVELS, TRAINING_PLACES, SEX_OPTIONS,
+    DIET_TYPES, ALLERGY_OPTIONS, INTOLERANCE_OPTIONS, PREFERENCE_OPTIONS,
+    INJURY_OPTIONS, INJURY_SEVERITY_OPTIONS, INJURY_RED_FLAGS,
+    EQUIPMENT_OPTIONS,
 )
 from calculations import calcular_macronutrientes
+from validation import validate_evaluation
+from knowledge_base import RULES, TIER_LABELS
+from design_system import (
+    SEVERITY_STYLE, TIER_STYLE, CATEGORY_ICON, cli_badge,
+)
 
 
 # ──────────────────────────────────────────────
-#  Consola global
+#  Consola global y paleta
 # ──────────────────────────────────────────────
 
 console = Console()
 
-# Paleta de colores del sistema
 COLOR_PRIMARY   = "bold cyan"
 COLOR_SECONDARY = "bold yellow"
 COLOR_SUCCESS   = "bold green"
@@ -46,39 +59,41 @@ COLOR_MUTED     = "dim white"
 COLOR_HEADER    = "bold white on dark_cyan"
 COLOR_ACCENT    = "bold magenta"
 
+SEVERITY_SORT = {k: v["order"] for k, v in SEVERITY_STYLE.items()}
+
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Banner principal
+#  Banner principal
 # ══════════════════════════════════════════════
 
 def show_banner() -> None:
-    """Muestra el banner de bienvenida del sistema."""
+    """Muestra el banner de bienvenida del sistema (marca FitExpert)."""
     console.clear()
     banner = Text(justify="center")
     banner.append("\n")
-    banner.append("  ██╗     ██╗███████╗███████╗  \n", style="bold cyan")
-    banner.append("  ██║     ██║██╔════╝██╔════╝  \n", style="bold cyan")
-    banner.append("  ██║     ██║█████╗  █████╗    \n", style="bold cyan")
-    banner.append("  ██║     ██║██╔══╝  ██╔══╝    \n", style="bold cyan")
-    banner.append("  ███████╗██║██║     ███████╗  \n", style="bold cyan")
-    banner.append("  ╚══════╝╚═╝╚═╝     ╚══════╝  \n", style="bold cyan")
+    banner.append("  ███████╗██╗████████╗███████╗██╗  ██╗██████╗ ███████╗██████╗ ████████╗\n", style="bold #E94E4E")
+    banner.append("  ██╔════╝██║╚══██╔══╝██╔════╝╚██╗██╔╝██╔══██╗██╔════╝██╔══██╗╚══██╔══╝\n", style="bold #E94E4E")
+    banner.append("  █████╗  ██║   ██║   █████╗   ╚███╔╝ ██████╔╝█████╗  ██████╔╝   ██║\n", style="bold #E94E4E")
+    banner.append("  ██╔══╝  ██║   ██║   ██╔══╝   ██╔██╗ ██╔══██╗██╔══╝  ██╔══██╗   ██║\n", style="bold #E94E4E")
+    banner.append("  ██║     ██║   ██║   ███████╗██╔╝ ██╗██║  ██║███████╗██║  ██║   ██║\n", style="bold #E94E4E")
+    banner.append("  ╚═╝     ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝\n", style="bold #E94E4E")
 
     console.print(banner)
     console.print(
         Panel(
             Text.from_markup(
                 "[bold white]Sistema Experto en Nutrición y Acondicionamiento Físico[/bold white]\n"
-                "[dim]Asesoramiento personalizado basado en reglas de conocimiento especializado[/dim]\n"
-                "[dim cyan]Universidad · Inteligencia Artificial · Sistemas Expertos[/dim cyan]"
+                f"[dim]Motor basado en reglas · {len(RULES)} reglas IF/THEN · Encadenamiento hacia adelante[/dim]\n"
+                "[dim cyan]Inteligencia Artificial · Sistemas Expertos[/dim cyan]"
             ),
-            border_style="cyan",
+            border_style="#E94E4E",
             padding=(1, 4),
         )
     )
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Menú principal
+#  Menú principal
 # ══════════════════════════════════════════════
 
 def show_main_menu() -> str:
@@ -109,26 +124,72 @@ def show_main_menu() -> str:
 
 
 # ══════════════════════════════════════════════
-#  FORMULARIO: Datos del usuario
+#  Formulario: datos del usuario
 # ══════════════════════════════════════════════
 
-def _show_options_table(title: str, options: dict, labels: dict) -> None:
+def _show_options_table(title: str, options: dict, labels: dict | None = None) -> None:
     """Muestra una tabla de opciones numeradas para un campo."""
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     t.add_column(style="bold cyan", no_wrap=True)
     t.add_column(style="white")
     for key, val in options.items():
-        t.add_row(f"  [{key}]", labels.get(val, val))
+        texto = labels.get(val, val) if labels else val
+        if isinstance(texto, dict):
+            texto = next(iter(texto.values()))
+        t.add_row(f"  [{key}]", str(texto))
     console.print(t)
+
+
+def _multi_choice(prompt_text: str, options: dict, n_cols: int = 2) -> list:
+    """
+    Selección múltiple por números separados por comas (Enter = ninguna).
+    `options` es {clave: etiqueta humana}. Retorna lista de claves válidas.
+    """
+    items = list(options.items())
+    t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    t.add_column(style="bold cyan", no_wrap=True)
+    t.add_column(style="white")
+    for i, (key, label) in enumerate(items, 1):
+        t.add_row(f"  [{i}]", label)
+    if n_cols >= 2 and len(items) > 4:
+        # Dos columnas para no alargar demasiado la pantalla
+        half = (len(items) + 1) // 2
+        t1_items, t2_items = items[:half], items[half:]
+        t1 = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+        t2 = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+        t1.add_column(style="bold cyan", no_wrap=True)
+        t1.add_column(style="white")
+        t2.add_column(style="bold cyan", no_wrap=True)
+        t2.add_column(style="white")
+        for i, (key, label) in enumerate(t1_items, 1):
+            t1.add_row(f"  [{i}]", label)
+        for i, (key, label) in enumerate(t2_items, half + 1):
+            t2.add_row(f"  [{i}]", label)
+        console.print(Columns([t1, t2]))
+    else:
+        console.print(t)
+
+    while True:
+        raw = Prompt.ask(prompt_text, default="")
+        if not raw.strip():
+            return []
+        try:
+            idxs = [int(p) for p in raw.replace(";", ",").replace(" ", "").split(",") if p.strip()]
+        except ValueError:
+            console.print("[bold red]  ✗ Usa números separados por comas (ej: 1,3).[/bold red]")
+            continue
+        if any(i < 1 or i > len(items) for i in idxs):
+            console.print(f"[bold red]  ✗ Elige números entre 1 y {len(items)}.[/bold red]")
+            continue
+        seleccion = [items[i - 1][0] for i in dict.fromkeys(idxs)]
+        return seleccion
 
 
 def collect_user_data() -> UserProfile:
     """
-    Guía al usuario a través del formulario de evaluación inicial.
-    Retorna un UserProfile con todos los datos recopilados.
+    Guía al usuario a través del formulario completo de evaluación.
+    Valida cada campo y retorna un UserProfile con todos los datos.
     """
-    profile = UserProfile()
-
     console.print()
     console.print(RichRule("[bold cyan]EVALUACIÓN INICIAL[/bold cyan]", style="cyan"))
     console.print(
@@ -140,61 +201,69 @@ def collect_user_data() -> UserProfile:
     )
     console.print()
 
+    data: dict = {}
+    data["name"] = Prompt.ask("[white]Nombre[/white]").strip() or "Usuario"
+    data["notes"] = ""
+
     # ── Datos personales ──────────────────────────────────────────────────
-
     console.print("[bold cyan]── Datos Personales ──────────────────────────────────[/bold cyan]")
-    profile.name = Prompt.ask("[white]Nombre[/white]").strip() or "Usuario"
 
-    # Edad
     while True:
-        age = IntPrompt.ask("[white]Edad (años)[/white]")
-        if 10 <= age <= 100:
-            profile.age = age
+        try:
+            age = int(Prompt.ask("[white]Edad (años)[/white]"))
+        except ValueError:
+            console.print("[bold red]  ✗ Ingresa un número entero (10–110).[/bold red]")
+            continue
+        if 10 <= age <= 110:
+            data["age"] = age
             break
-        console.print("[bold red]  ✗ Ingresa una edad válida (10–100).[/bold red]")
+        console.print("[bold red]  ✗ Ingresa una edad válida (10–110).[/bold red]")
 
-    # Sexo
     console.print("[white]Sexo:[/white]")
     _show_options_table("Sexo", SEX_OPTIONS, {v: v.capitalize() for v in SEX_OPTIONS.values()})
     sex_key = Prompt.ask("  Selecciona", choices=list(SEX_OPTIONS.keys()))
-    profile.sex = SEX_OPTIONS[sex_key]
+    data["sex"] = SEX_OPTIONS[sex_key]
 
-    # Peso
     while True:
-        weight = FloatPrompt.ask("[white]Peso (kg)[/white]")
-        if 30 <= weight <= 300:
-            profile.weight = weight
+        try:
+            weight = float(Prompt.ask("[white]Peso (kg)[/white]"))
+        except ValueError:
+            console.print("[bold red]  ✗ Ingresa un número (ej: 72.5).[/bold red]")
+            continue
+        if 20 <= weight <= 400:
+            data["weight"] = weight
             break
-        console.print("[bold red]  ✗ Ingresa un peso válido (30–300 kg).[/bold red]")
+        console.print("[bold red]  ✗ Ingresa un peso válido (20–400 kg).[/bold red]")
 
-    # Altura
     while True:
-        height = FloatPrompt.ask("[white]Altura (cm)[/white]")
+        try:
+            height = float(Prompt.ask("[white]Altura (cm)[/white]"))
+        except ValueError:
+            console.print("[bold red]  ✗ Ingresa un número (ej: 172).[/bold red]")
+            continue
         if 100 <= height <= 250:
-            profile.height = height
+            data["height"] = height
             break
         console.print("[bold red]  ✗ Ingresa una altura válida (100–250 cm).[/bold red]")
 
-    # ── Objetivos y entrenamiento ─────────────────────────────────────────
+    grasa_raw = Prompt.ask("[white]% de grasa corporal (Enter para omitir)[/white]", default="")
+    data["body_fat_pct"] = grasa_raw if grasa_raw.strip() else 0.0
 
+    # ── Objetivos y entrenamiento ─────────────────────────────────────────
     console.print()
     console.print("[bold cyan]── Objetivos y Entrenamiento ─────────────────────────[/bold cyan]")
 
-    # Objetivo corporal
     console.print("[white]Objetivo corporal:[/white]")
     _show_options_table("Objetivo", OBJECTIVES, OBJECTIVE_LABELS)
     obj_key = Prompt.ask("  Selecciona", choices=list(OBJECTIVES.keys()))
-    profile.objective = OBJECTIVES[obj_key]
+    data["objective"] = OBJECTIVES[obj_key]
 
-    # Nivel de actividad
     console.print("[white]Nivel de actividad física actual:[/white]")
     _show_options_table("Actividad", ACTIVITY_LEVELS, ACTIVITY_LABELS)
     act_key = Prompt.ask("  Selecciona", choices=list(ACTIVITY_LEVELS.keys()))
-    profile.activity_level = ACTIVITY_LEVELS[act_key]
+    data["activity_level"] = ACTIVITY_LEVELS[act_key]
 
-    # Experiencia
     console.print("[white]Nivel de experiencia en entrenamiento:[/white]")
-    exp_labels = {v: v.capitalize() for v in EXPERIENCE_LEVELS.values()}
     exp_descriptions = {
         "principiante": "Principiante (menos de 6 meses)",
         "intermedio":   "Intermedio (6 meses – 2 años)",
@@ -202,14 +271,95 @@ def collect_user_data() -> UserProfile:
     }
     _show_options_table("Experiencia", EXPERIENCE_LEVELS, exp_descriptions)
     exp_key = Prompt.ask("  Selecciona", choices=list(EXPERIENCE_LEVELS.keys()))
-    profile.experience = EXPERIENCE_LEVELS[exp_key]
+    data["experience"] = EXPERIENCE_LEVELS[exp_key]
 
-    # Lugar de entrenamiento
     console.print("[white]Preferencia de lugar de entrenamiento:[/white]")
     place_labels = {"casa": "Entrenamiento en Casa", "gimnasio": "Gimnasio"}
     _show_options_table("Lugar", TRAINING_PLACES, place_labels)
     place_key = Prompt.ask("  Selecciona", choices=list(TRAINING_PLACES.keys()))
-    profile.training_place = TRAINING_PLACES[place_key]
+    data["training_place"] = TRAINING_PLACES[place_key]
+
+    if data["training_place"] == "casa":
+        console.print("[white]Equipamiento disponible en casa (selección múltiple, Enter para 'solo peso corporal'):[/white]")
+        data["equipment"] = _multi_choice("  Equipos (ej: 1,3):", EQUIPMENT_OPTIONS)
+        if not data["equipment"]:
+            data["equipment"] = ["solo_peso_corporal"]
+    else:
+        data["equipment"] = []
+
+    # ── Salud y lesiones ──────────────────────────────────────────────────
+    console.print()
+    console.print("[bold yellow]── Salud y Lesiones ────────────────────────────────[/bold yellow]")
+
+    console.print("[white]Zonas con molestia o lesión (Enter si ninguna):[/white]")
+    data["injuries"] = _multi_choice("  Zonas (ej: 1,3):", INJURY_OPTIONS)
+
+    if data["injuries"]:
+        console.print("[white]Intensidad de las molestias:[/white]")
+        _show_options_table("Severidad", INJURY_SEVERITY_OPTIONS, INJURY_SEVERITY_OPTIONS)
+        sev_key = Prompt.ask("  Selecciona", choices=list(INJURY_SEVERITY_OPTIONS.keys()))
+        data["injury_severity"] = INJURY_SEVERITY_OPTIONS[sev_key]
+        if data["injury_severity"] == "aguda":
+            console.print("[bold red]  ⚠️ Lesión aguda: la prescripción de ejercicio quedará suspendida.[/bold red]")
+    else:
+        data["injury_severity"] = "ninguna"
+
+    confirm_balance = Prompt.ask(
+        "[white]¿Problemas de equilibrio o historial de caídas?[/white] (s/n)",
+        choices=["s", "n"], default="n",
+    )
+    data["balance_issues"] = confirm_balance == "s"
+
+    console.print("[white]Señales de alarma (Enter si ninguna):[/white]")
+    console.print("[dim]Si marcas alguna, el sistema NO prescribirá ejercicio hasta evaluación médica.[/dim]")
+    data["red_flags"] = _multi_choice("  Señales (ej: 1,3):", INJURY_RED_FLAGS)
+
+    # ── Nutrición ─────────────────────────────────────────────────────────
+    console.print()
+    console.print("[bold green]── Nutrición ───────────────────────────────────────[/bold green]")
+
+    console.print("[white]Tipo de dieta:[/white]")
+    _show_options_table("Dieta", DIET_TYPES, DIET_TYPES)
+    dieta_choices = list(DIET_TYPES.keys())
+    diet_key = Prompt.ask("  Selecciona", choices=dieta_choices, default="omnivoro")
+    data["diet_type"] = DIET_TYPES.get(diet_key, "omnivoro") if diet_key in DIET_TYPES else diet_key
+
+    console.print("[white]Alergias alimentarias (Enter si ninguna):[/white]")
+    console.print("[dim]Alergia = exclusión total del alimento y derivados.[/dim]")
+    data["allergies"] = _multi_choice("  Alergias (ej: 1,3):", ALLERGY_OPTIONS)
+
+    console.print("[white]Intolerancias digestivas (Enter si ninguna):[/white]")
+    data["intolerances"] = _multi_choice("  Intolerancias (ej: 1,3):", INTOLERANCE_OPTIONS)
+
+    console.print("[white]Preferencias de consumo (Enter si ninguna):[/white]")
+    data["preferences"] = _multi_choice("  Preferencias (ej: 1,3):", PREFERENCE_OPTIONS)
+
+    freq_raw = Prompt.ask("[white]Comidas al día (3, 4 o 5)[/white]", choices=["3", "4", "5"], default="3")
+    data["meal_frequency"] = int(freq_raw)
+
+    # ── Validación cruzada ────────────────────────────────────────────────
+    values, errores, advertencias = validate_evaluation(data)
+    if errores:
+        console.print()
+        for campo, msg in errores.items():
+            console.print(f"[bold red]  ✗ {campo.capitalize()}: {msg}[/bold red]")
+        console.print("[bold red]Corrige los datos indicados y vuelve a intentarlo.[/bold red]")
+        if data["age"] and 10 <= data["age"] <= 110:
+            # Reintento recursivo con inputs correctos es complejo; mejor usar
+            # defaults razonables derivados del input para avanzar con seguridad.
+            for k in ("name", "sex", "weight", "height"):
+                if k in errores:
+                    datos_sanos = {
+                        "name": "Usuario", "sex": "masculino",
+                        "weight": 70.0, "height": 170.0,
+                    }
+                    data[k] = datos_sanos.get(k, data.get(k))
+        values, errores, advertencias = validate_evaluation(data)
+
+    profile = UserProfile(**values)
+    console.print()
+    for w in advertencias:
+        console.print(Panel(f"[bold #FFB020]ℹ️ {w}[/bold #FFB020]", border_style="#FFB020", padding=(0, 1)))
 
     console.print()
     console.print("[bold green]  ✓ Datos recopilados correctamente.[/bold green]")
@@ -217,7 +367,7 @@ def collect_user_data() -> UserProfile:
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Resultados de cálculos
+#  Resultados de cálculos
 # ══════════════════════════════════════════════
 
 def show_calculations(profile: UserProfile) -> None:
@@ -225,82 +375,57 @@ def show_calculations(profile: UserProfile) -> None:
     console.print()
     console.print(RichRule("[bold cyan]RESULTADOS DE EVALUACIÓN FÍSICA[/bold cyan]", style="cyan"))
 
-    # ── Tabla de métricas ──────────────────────────────────────────────────
     t = Table(
         title=f"Métricas de {profile.name}",
-        box=box.ROUNDED,
-        border_style="cyan",
-        title_style="bold cyan",
-        padding=(0, 2),
+        box=box.ROUNDED, border_style="cyan",
+        title_style="bold cyan", padding=(0, 2),
     )
     t.add_column("Indicador",   style="bold white",   min_width=28)
     t.add_column("Valor",       style="bold yellow",  min_width=16, justify="right")
     t.add_column("Referencia",  style="dim white",    min_width=24)
 
-    # IMC con color según categoría
     imc_color = "green" if 18.5 <= profile.imc <= 24.9 else "yellow" if profile.imc < 18.5 else "red"
     t.add_row(
         "Índice de Masa Corporal (IMC)",
         f"[{imc_color}]{profile.imc:.2f} kg/m²[/{imc_color}]",
         f"[{imc_color}]{profile.imc_category}[/{imc_color}]",
     )
-    t.add_row(
-        "Tasa Metabólica Basal (TMB)",
-        f"{profile.tmb:.0f} kcal/día",
-        "Calorías en reposo total",
-    )
-    t.add_row(
-        "Gasto Energético Diario (TDEE)",
-        f"{profile.tdee:.0f} kcal/día",
-        f"Nivel: {profile.activity_level}",
-    )
+    t.add_row("Tasa Metabólica Basal (TMB)", f"{profile.tmb:.0f} kcal/día", "Calorías en reposo total")
+    t.add_row("Gasto Energético Diario (TDEE)", f"{profile.tdee:.0f} kcal/día", f"Nivel: {profile.activity_label()}")
     t.add_row(
         "Calorías Objetivo Diarias",
         f"[bold green]{profile.target_calories:.0f} kcal/día[/bold green]",
         f"Meta: {profile.objective_label()}",
     )
+    if profile.adjustment_capped:
+        t.add_row("Ajuste calórico", "Limitado por seguridad", profile.adjustment_reason or "Política de rango")
 
     console.print(t)
 
-    # ── Macronutrientes ────────────────────────────────────────────────────
-    macros = calcular_macronutrientes(profile.target_calories, profile.objective)
+    if profile.body_fat_pct:
+        console.print(f"  [dim]% de grasa declarado:[/dim] {profile.body_fat_pct}%")
+
+    macros = calcular_macronutrientes(profile.target_calories, profile.objective, perfil=profile)
 
     macro_table = Table(
         title="Distribución de Macronutrientes",
-        box=box.ROUNDED,
-        border_style="magenta",
-        title_style="bold magenta",
-        padding=(0, 2),
+        box=box.ROUNDED, border_style="magenta",
+        title_style="bold magenta", padding=(0, 2),
     )
     macro_table.add_column("Macronutriente", style="bold white",   min_width=20)
     macro_table.add_column("Gramos/día",     style="bold yellow",  min_width=14, justify="right")
     macro_table.add_column("% Calorías",     style="bold cyan",    min_width=12, justify="center")
     macro_table.add_column("Calorías",       style="dim white",    min_width=12, justify="right")
 
-    macro_table.add_row(
-        "🥩 Proteínas",
-        f"{macros['proteinas']} g",
-        f"{macros['p_pct']}%",
-        f"{macros['proteinas'] * 4:.0f} kcal",
-    )
-    macro_table.add_row(
-        "🍚 Carbohidratos",
-        f"{macros['carbohidratos']} g",
-        f"{macros['c_pct']}%",
-        f"{macros['carbohidratos'] * 4:.0f} kcal",
-    )
-    macro_table.add_row(
-        "🥑 Grasas",
-        f"{macros['grasas']} g",
-        f"{macros['g_pct']}%",
-        f"{macros['grasas'] * 9:.0f} kcal",
-    )
+    macro_table.add_row("🥩 Proteínas",  f"{macros['proteinas']} g", f"{macros['p_pct']}%", f"{macros['proteinas'] * 4:.0f} kcal")
+    macro_table.add_row("🍚 Carbohidratos", f"{macros['carbohidratos']} g", f"{macros['c_pct']}%", f"{macros['carbohidratos'] * 4:.0f} kcal")
+    macro_table.add_row("🥑 Grasas", f"{macros['grasas']} g", f"{macros['g_pct']}%", f"{macros['grasas'] * 9:.0f} kcal")
 
     console.print(macro_table)
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Plan Nutricional
+#  Plan Nutricional
 # ══════════════════════════════════════════════
 
 def show_nutrition_plan(plan: dict) -> None:
@@ -319,38 +444,50 @@ def show_nutrition_plan(plan: dict) -> None:
 
     for meal_name, options in meals:
         t = Table(
-            title=meal_name,
-            box=box.SIMPLE_HEAD,
-            title_style="bold yellow",
-            border_style="dim yellow",
-            padding=(0, 1),
-            show_header=False,
+            title=meal_name, box=box.SIMPLE_HEAD,
+            title_style="bold yellow", border_style="dim yellow",
+            padding=(0, 1), show_header=False,
         )
         t.add_column(style="white", no_wrap=False, max_width=70)
         for idx, option in enumerate(options, 1):
             t.add_row(f"  [dim cyan]{idx}.[/dim cyan]  {option}")
         console.print(t)
 
-    # Hidratación
     console.print(
         Panel(
             f"[bold cyan]💧 Hidratación:[/bold cyan] {meal_data['hidratacion']}",
-            border_style="cyan",
-            padding=(0, 2),
+            border_style="cyan", padding=(0, 2),
         )
     )
 
+    # Transparencia de alergias / sustituciones
+    if plan.get("sustituciones"):
+        console.print(
+            Panel(
+                "\n".join(
+                    f"[bold #B48CF2]•[/bold #B48CF2] "
+                    f"{ALLERGY_OPTIONS.get(s.get('alergeno', ''), s.get('alergeno', ''))}: "
+                    f"{s.get('substitucion', '')}"
+                    for s in plan["sustituciones"]
+                ) + "\n\n[dim]⚠️ Ningún sistema puede garantizar «100 % seguro»: "
+                    "la contaminación cruzada depende de las etiquetas.[/dim]",
+                border_style="#B48CF2", padding=(1, 2),
+                title="[bold #B48CF2]🔁 Sustituciones por alergias[/bold #B48CF2]",
+            )
+        )
+    if plan.get("derivacion"):
+        console.print(f"  [dim]🩺 {plan['derivacion']}[/dim]")
+
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Plan de Entrenamiento
+#  Plan de Entrenamiento
 # ══════════════════════════════════════════════
 
 def show_training_plan(routine: dict) -> None:
-    """Muestra la rutina de entrenamiento del usuario."""
+    """Muestra la rutina de entrenamiento (semana completa con descansos)."""
     console.print()
     console.print(RichRule("[bold magenta]PLAN DE ENTRENAMIENTO[/bold magenta]", style="magenta"))
 
-    # Encabezado de la rutina
     console.print(
         Panel(
             Text.from_markup(
@@ -358,19 +495,25 @@ def show_training_plan(routine: dict) -> None:
                 f"[yellow]Días:[/yellow] {routine['dias']}\n"
                 f"[yellow]Tipo:[/yellow] {routine['tipo']}"
             ),
-            border_style="magenta",
-            padding=(1, 2),
+            border_style="magenta", padding=(1, 2),
         )
     )
 
-    # Sesiones
-    for session in routine.get("sesiones", []):
+    # Semana completa (incluye días de descanso); las key de sesión son
+    # `dia/grupo` (contrato de training.py) — se corrige el KeyError de v2.
+    for session in routine.get("semana", routine.get("sesiones", [])):
+        if session.get("descanso"):
+            console.print(
+                f"  [dim #FFB020]◌[/dim #FFB020] [bold #9AA8C0]{session['dia']}[/bold #9AA8C0] — "
+                f"{session.get('nota', 'Descanso planificado.')}"
+            )
+            console.print()
+            continue
+
         t = Table(
-            title=session["nombre"],
-            box=box.ROUNDED,
-            border_style="dim magenta",
-            title_style="bold white",
-            padding=(0, 1),
+            title=f"{session['dia']} · {session['grupo']}",
+            box=box.ROUNDED, border_style="dim magenta",
+            title_style="bold white", padding=(0, 1),
         )
         t.add_column("Ejercicio",    style="bold white",  min_width=32)
         t.add_column("Series/Reps",  style="bold yellow", min_width=22, justify="center")
@@ -381,82 +524,133 @@ def show_training_plan(routine: dict) -> None:
 
         console.print(t)
         console.print(
-            f"  [dim]⏱ Descanso:[/dim] {session.get('descanso', '–')}   "
+            f"  [dim]⏱ Descanso:[/dim] {session.get('descanso_entre_series', '–')}   "
             f"[dim]⌛ Duración aprox.:[/dim] {session.get('duracion', '–')}"
         )
+        if session.get("nota"):
+            console.print(f"  [dim]💬 [i]{session['nota']}[/i][/dim]")
         console.print()
 
-    # Cardio extra y notas
     if routine.get("cardio_extra"):
-        console.print(
-            f"  [bold cyan]🏃 Cardio adicional:[/bold cyan] {routine['cardio_extra']}"
-        )
+        console.print(f"  [bold cyan]🏃 Cardio adicional:[/bold cyan] {routine['cardio_extra']}")
     if routine.get("notas"):
         console.print(
             Panel(
                 f"[dim white]💡 {routine['notas']}[/dim white]",
-                border_style="dim cyan",
-                padding=(0, 2),
+                border_style="dim cyan", padding=(0, 2),
                 title="[bold dim]Nota del entrenador[/bold dim]",
+            )
+        )
+
+    if routine.get("lesiones_consideradas"):
+        console.print(
+            f"  [bold #B48CF2]🩹 Restricciones por lesión:[/bold #B48CF2] "
+            + ", ".join(routine["lesiones_consideradas"])
+        )
+    if routine.get("alternativas_aplicadas"):
+        console.print(
+            Panel(
+                "\n".join(f"[dim]• {a}[/dim]" for a in routine["alternativas_aplicadas"]),
+                border_style="#B48CF2", padding=(0, 2),
+                title="[bold #B48CF2]🔁 Ejercicios sustituidos por lesión[/bold #B48CF2]",
             )
         )
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Conclusiones del Motor de Inferencia
+#  Conclusiones del motor de inferencia
 # ══════════════════════════════════════════════
 
 def show_conclusions(profile: UserProfile) -> None:
-    """Muestra las conclusiones generadas por el motor de inferencia."""
+    """Muestra las conclusiones con severidad, tier, referencias y alternativa."""
     console.print()
     console.print(RichRule("[bold yellow]RECOMENDACIONES DEL SISTEMA EXPERTO[/bold yellow]", style="yellow"))
 
-    CATEGORY_ICONS = {
-        "nutricion":     ("🥗", "green"),
-        "entrenamiento": ("🏋️", "magenta"),
-        "seguimiento":   ("📊", "cyan"),
-        "alerta":        ("⚠️",  "red"),
-    }
-
-    # Agrupar por categoría
-    by_cat: dict[str, list] = {}
-    for c in profile.conclusions:
-        by_cat.setdefault(c["category"], []).append(c)
-
-    for cat, conclusions in by_cat.items():
-        icon, color = CATEGORY_ICONS.get(cat, ("•", "white"))
-        console.print(f"\n  [{color}]{icon}  {cat.upper()}[/{color}]")
-
-        t = Table(
-            box=box.SIMPLE,
-            show_header=True,
-            padding=(0, 1),
-            border_style=f"dim {color}",
+    if profile.red_flags:
+        console.print(
+            Panel(
+                "[bold red]⚠️ Señales de alarma declaradas: la evaluación exige consulta "
+                "médica antes de ejercitarse. No se prescribe ejercicio.[/bold red]",
+                border_style="red",
+            )
         )
-        t.add_column("ID",              style=f"dim {color}",   no_wrap=True, min_width=10)
-        t.add_column("Recomendación",   style="white",          no_wrap=False)
 
-        for c in conclusions:
-            t.add_row(c["id"], c["conclusion"])
+    if not profile.conclusions:
+        console.print("[dim]No se activaron reglas específicas para este perfil.[/dim]")
+        return
 
-        console.print(t)
+    orden = sorted(
+        profile.conclusions,
+        key=lambda c: (SEVERITY_SORT.get(c.get("severity", "info"), 9),
+                       -(c.get("priority") or 0)),
+    )
+
+    for c in orden:
+        icon = CATEGORY_ICON.get(c.get("category", ""), "🩺")
+        sev = SEVERITY_STYLE.get(c.get("severity", "info"), SEVERITY_STYLE["info"])
+        tier_label = c.get("tier_label", c.get("tier", ""))
+        bad = (
+            f"[{sev['color']}]{sev['icon']} {sev['label'].upper()}[/{sev['color']}]  "
+            f"[#9AA8C0]·[/#9AA8C0]  [{TIER_STYLE.get(c.get('tier', ''), {}).get('color', '#9AA8C0')}]"
+            f"{TIER_STYLE.get(c.get('tier', ''), {}).get('icon', '•')} {tier_label}"
+            f"[/{TIER_STYLE.get(c.get('tier', ''), {}).get('color', '#9AA8C0')}]"
+        )
+        refs = c.get("references") or []
+        refs_txt = " · ".join(refs) if refs else "—"
+        alt = c.get("alternative") or ""
+
+        cuerpo = (
+            f"[bold white]{icon} [{c.get('id', '')}] {c.get('description', '')}[/bold white]\n"
+            f"{bad}\n\n"
+            f"[bold #4EC9B0]👉 Recomendación:[/bold #4EC9B0] {c.get('conclusion', '')}"
+        )
+        if alt:
+            cuerpo += f"\n\n[bold #B48CF2]↪️ Alternativa:[/bold #B48CF2] {alt}"
+        cuerpo += f"\n\n[dim]📚 {refs_txt}[/dim]"
+        console.print(
+            Panel(
+                Text.from_markup(cuerpo),
+                border_style=sev["color"], padding=(1, 2),
+                title=f"[bold {sev['color']}]{sev['icon']} Clase {sev['label']}[/bold {sev['color']}]",
+            )
+        )
+
+    # Reglas suprimidas por conflicto
+    if profile.suppressed:
+        console.print(
+            Panel(
+                "\n".join(
+                    f"[dim]• [{s.get('id', '')}] reemplazada por [{s.get('suppressed_by', '')}] — {s.get('reason', '')}[/dim]"
+                    for s in profile.suppressed
+                ),
+                border_style="#B48CF2", padding=(0, 2),
+                title="[bold #B48CF2]🚫 Reglas suprimidas por jerarquía[/bold #B48CF2]",
+            )
+        )
+
+    if profile.engine_errors:
+        console.print(
+            Panel(
+                "\n".join(f"[bold red]• [{e.get('id', '')}] {e.get('error', '')}[/bold red]"
+                          for e in profile.engine_errors),
+                border_style="red", padding=(0, 2),
+                title="[bold red]🔧 Errores internos de evaluación (auditoría)[/bold red]",
+            )
+        )
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Módulo de Explicación
+#  Módulo de explicación
 # ══════════════════════════════════════════════
 
 def show_explanations(profile: UserProfile) -> None:
-    """
-    Módulo de explicación: muestra el razonamiento detrás de cada conclusión.
-    Característica clave de los Sistemas Expertos.
-    """
+    """Muestra el razonamiento detrás de cada conclusión del motor."""
     console.print()
     console.print(RichRule("[bold white]MÓDULO DE EXPLICACIÓN[/bold white]", style="white"))
     console.print(
         Panel(
-            "[dim]Este módulo muestra el razonamiento del motor de inferencia.\n"
-            "Explica POR QUÉ se generó cada recomendación, como lo haría un experto humano.[/dim]",
+            "[dim]Este módulo muestra el razonamiento del motor de inferencia:\n"
+            "el POR QUÉ de cada recomendación, como lo haría un experto humano.[/dim]",
             border_style="dim white",
         )
     )
@@ -467,26 +661,30 @@ def show_explanations(profile: UserProfile) -> None:
 
     for i, exp in enumerate(profile.explanations, 1):
         rule_id = exp["id"]
-        # Buscar conclusión correspondiente
         conclusion = next(
             (c["conclusion"] for c in profile.conclusions if c["id"] == rule_id),
-            "–"
+            "–",
+        )
+        refs = exp.get("references") or []
+        refs_txt = " · ".join(refs) if refs else "—"
+        cuerpo = (
+            f"[bold cyan]Regla {rule_id}[/bold cyan]\n"
+            f"[bold white]Conclusión:[/bold white] {conclusion}\n\n"
+            f"[white]{exp.get('explanation', '')}[/white]\n\n"
+            f"[dim #4EC9B0]Motivo de activación: {exp.get('trigger', '—')}[/dim #4EC9B0]\n"
+            f"[dim #4C9AFF]Referencias: {refs_txt}[/dim #4C9AFF]"
         )
         console.print(
             Panel(
-                Text.from_markup(
-                    f"[bold cyan]Regla {rule_id}[/bold cyan]\n"
-                    f"[bold white]Conclusión:[/bold white] {conclusion}\n\n"
-                    f"[dim white]{exp['explanation']}[/dim white]"
-                ),
-                border_style="dim cyan",
-                padding=(1, 2),
+                Text.from_markup(cuerpo),
+                border_style="dim cyan", padding=(1, 2),
+                title=f"[dim][{i}] Explicación[/dim]",
             )
         )
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Hechos (Facts — OAV)
+#  Hechos (Facts — OAV)
 # ══════════════════════════════════════════════
 
 def show_facts(profile: UserProfile) -> None:
@@ -496,41 +694,30 @@ def show_facts(profile: UserProfile) -> None:
 
     for objeto, atributos in profile.facts.items():
         t = Table(
-            title=objeto,
-            box=box.SIMPLE_HEAD,
-            title_style="bold white",
-            border_style="dim",
-            padding=(0, 2),
+            title=objeto, box=box.SIMPLE_HEAD,
+            title_style="bold white", border_style="dim", padding=(0, 2),
         )
         t.add_column("Atributo", style="cyan",   min_width=26)
         t.add_column("Valor",    style="yellow",  min_width=20)
-
         for attr, val in atributos.items():
             t.add_row(attr, str(val))
-
         console.print(t)
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Historial de usuarios
+#  Historial de usuarios
 # ══════════════════════════════════════════════
 
 def show_user_history(users: list[dict]) -> None:
-    """Muestra el historial de usuarios guardados en la base de datos."""
+    """Muestra el historial de consultas guardadas."""
     console.print()
     console.print(RichRule("[bold cyan]HISTORIAL DE CONSULTAS[/bold cyan]", style="cyan"))
 
     if not users:
-        console.print(
-            Panel("[dim]No hay usuarios registrados aún.[/dim]", border_style="dim")
-        )
+        console.print(Panel("[dim]No hay consultas registradas aún.[/dim]", border_style="dim"))
         return
 
-    t = Table(
-        box=box.ROUNDED,
-        border_style="cyan",
-        padding=(0, 1),
-    )
+    t = Table(box=box.ROUNDED, border_style="cyan", padding=(0, 1))
     t.add_column("#",         style="dim",          justify="right",  min_width=3)
     t.add_column("Nombre",    style="bold white",   min_width=15)
     t.add_column("Edad",      style="yellow",       justify="center", min_width=6)
@@ -559,77 +746,92 @@ def show_user_history(users: list[dict]) -> None:
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Estadísticas del sistema
+#  Estadísticas del sistema
 # ══════════════════════════════════════════════
 
 def show_stats(stats: dict, engine_summary: dict | None = None) -> None:
-    """Muestra estadísticas del sistema y de la base de datos."""
+    """Muestra estadísticas de la base de datos y del motor de inferencia."""
     console.print()
     console.print(RichRule("[bold cyan]ESTADÍSTICAS DEL SISTEMA[/bold cyan]", style="cyan"))
 
-    # Stats de usuarios
     t = Table(box=box.ROUNDED, border_style="cyan", padding=(0, 2))
-    t.add_column("Indicador",  style="bold white",  min_width=30)
+    t.add_column("Indicador",  style="bold white",  min_width=34)
     t.add_column("Valor",      style="bold yellow",  min_width=14, justify="right")
 
-    t.add_row("Total de consultas registradas", str(stats.get("total_usuarios", 0)))
-    for obj, count in stats.get("por_objetivo", {}).items():
+    t.add_row("Consultas registradas",
+              str(stats.get("total_sesiones", stats.get("total_consultas", 0))))
+    t.add_row("Usuarios únicos", str(stats.get("usuarios_unicos", 0)))
+    t.add_row("Reglas en la base de conocimiento", str(len(RULES)))
+    t.add_row("Jerarquías de conocimiento", str(len(TIER_LABELS)))
+    for obj, count in (stats.get("por_objetivo") or {}).items():
         label = OBJECTIVE_LABELS.get(obj, obj)
         t.add_row(f"  └─ {label}", str(count))
 
     console.print(t)
 
-    # Stats del motor de inferencia
     if engine_summary:
-        t2 = Table(box=box.ROUNDED, border_style="magenta", padding=(0, 2),
-                   title="Motor de Inferencia — Última Sesión", title_style="bold magenta")
+        t2 = Table(
+            box=box.ROUNDED, border_style="magenta", padding=(0, 2),
+            title="Motor de Inferencia — Última Sesión", title_style="bold magenta",
+        )
         t2.add_column("Métrica",           style="bold white",  min_width=30)
         t2.add_column("Valor",             style="bold yellow", min_width=14, justify="right")
         t2.add_row("Total de reglas en la base",   str(engine_summary.get("total_rules", 0)))
         t2.add_row("Reglas activadas (FIRED)",     str(engine_summary.get("fired", 0)))
-        t2.add_row("Reglas no aplicadas",          str(engine_summary.get("skipped", 0)))
-        t2.add_row("IDs de reglas activadas",      ", ".join(engine_summary.get("fired_ids", [])))
+        t2.add_row("Reglas no aplicadas (SKIP)",   str(engine_summary.get("skipped", 0)))
+        t2.add_row("Reglas suprimidas (conflicto)", str(engine_summary.get("suppressed", 0)))
+        t2.add_row("Reglas con error",             str(engine_summary.get("errors", 0)))
+        t2.add_row("IDs activadas",                ", ".join(engine_summary.get("fired_ids", [])))
         console.print(t2)
 
 
 # ══════════════════════════════════════════════
-#  PANTALLA: Acerca del sistema
+#  Acerca del sistema
 # ══════════════════════════════════════════════
 
 def show_about() -> None:
-    """Muestra información sobre el sistema experto."""
+    """Muestra información del sistema experto (actualizada a v3)."""
     console.print()
     console.print(RichRule("[bold white]ACERCA DEL SISTEMA[/bold white]", style="white"))
+
+    tier_info = "\n".join(
+        f"  [cyan]•[/cyan] {TIER_LABELS.get(tier, tier)}  "
+        f"[dim]({sum(1 for r in RULES if r.tier == tier)} reglas)[/dim]"
+        for tier in TIER_LABELS
+    )
+
     console.print(
         Panel(
             Text.from_markup(
-                "[bold cyan]Sistema Experto en Nutrición y Acondicionamiento Físico[/bold cyan]\n\n"
+                "[bold #E94E4E]FitExpert — Sistema Experto en Nutrición y Acondicionamiento Físico[/bold #E94E4E]\n\n"
                 "[bold white]Arquitectura:[/bold white]\n"
-                "  [cyan]•[/cyan] Base de Conocimiento  — Reglas de producción IF-THEN (knowledge_base.py)\n"
+                "  [cyan]•[/cyan] Base de Conocimiento  — "
+                f"[bold]{len(RULES)} reglas IF/THEN[/bold] (knowledge_base.py)\n"
                 "  [cyan]•[/cyan] Motor de Inferencia   — Encadenamiento hacia adelante (inference_engine.py)\n"
                 "  [cyan]•[/cyan] Módulo de Cálculos    — IMC, TMB, TDEE (calculations.py)\n"
-                "  [cyan]•[/cyan] Planes Nutricionales  — Catálogo por objetivo (nutrition.py)\n"
-                "  [cyan]•[/cyan] Planes de Entreno     — Rutinas por nivel y lugar (training.py)\n"
-                "  [cyan]•[/cyan] Base de Datos         — Persistencia JSON (database.py)\n"
+                "  [cyan]•[/cyan] Planes Nutricionales  — Recetas estructuradas por objetivo (nutrition.py)\n"
+                "  [cyan]•[/cyan] Planes de Entreno     — Matriz de lesiones + filtros biomecánicos (training.py)\n"
+                "  [cyan]•[/cyan] Base de Datos         — Persistencia JSON atómica (database.py)\n"
+                "  [cyan]•[/cyan] Autenticación         — Argon2id con migración de legados (auth.py)\n"
                 "  [cyan]•[/cyan] Interfaz de Usuario   — Consola enriquecida (ui.py)\n\n"
-                "[bold white]Representación del conocimiento:[/bold white] Objeto-Atributo-Valor\n"
-                "[bold white]Estrategia de inferencia:[/bold white]      Forward Chaining\n"
-                "[bold white]Fórmula nutricional:[/bold white]           Mifflin-St Jeor (Harris-Benedict revisada)\n\n"
+                "[bold white]Jerarquía de conocimiento:[/bold white]\n"
+                f"{tier_info}\n\n"
+                "[bold white]Representación:[/bold white] Objeto-Atributo-Valor · "
+                "[bold white]Inferencia:[/bold white] Forward Chaining\n"
+                "[bold white]Fórmula calórica:[/bold white] Mifflin-St Jeor (OMS para menores ≥ 16)\n\n"
                 "[bold yellow]⚠  Limitaciones del sistema:[/bold yellow]\n"
-                "  Este sistema es una herramienta de orientación general.\n"
-                "  No reemplaza la consulta con nutricionistas, médicos ni\n"
-                "  entrenadores certificados, especialmente en casos de\n"
-                "  enfermedades crónicas o condiciones médicas especiales.\n\n"
+                "  Herramienta informativa y académica. No reemplaza la consulta con\n"
+                "  nutricionistas, médicos ni entrenadores certificados, especialmente\n"
+                "  ante enfermedades crónicas, lesiones agudas o señales de alarma.\n\n"
                 "[dim]Desarrollado como proyecto académico — Sistemas Expertos[/dim]"
             ),
-            border_style="cyan",
-            padding=(1, 3),
+            border_style="#E94E4E", padding=(1, 3),
         )
     )
 
 
 # ══════════════════════════════════════════════
-#  UTILIDADES
+#  Utilidades
 # ══════════════════════════════════════════════
 
 def press_enter_to_continue() -> None:
@@ -656,16 +858,16 @@ def show_save_confirmation(name: str) -> None:
 
 def show_error(message: str) -> None:
     """Muestra un mensaje de error."""
-    console.print(
-        Panel(f"[bold red]✗ Error:[/bold red] {message}", border_style="red")
-    )
+    console.print(Panel(f"[bold red]✗ Error:[/bold red] {message}", border_style="red"))
 
 
 def show_section_header(title: str, subtitle: str = "") -> None:
     """Muestra un encabezado de sección."""
     console.print()
     console.print(Panel(
-        Text.from_markup(f"[bold white]{title}[/bold white]\n[dim]{subtitle}[/dim]" if subtitle else f"[bold white]{title}[/bold white]"),
-        border_style="cyan",
-        padding=(0, 2),
+        Text.from_markup(
+            f"[bold white]{title}[/bold white]\n[dim]{subtitle}[/dim]" if subtitle
+            else f"[bold white]{title}[/bold white]"
+        ),
+        border_style="cyan", padding=(0, 2),
     ))

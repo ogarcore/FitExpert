@@ -1,0 +1,36 @@
+# ── Entorno virtual ─────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Caché y artefactos de Python ────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Datos sensibles / runtime (NUNCA deben versionarse) ─────
+# Credenciales, sesiones y datos de salud de usuarios reales.
+auth_db.json
+usuarios.json
+local_session.json
+*.session.json
+
+# ── Documentos generados por build_final_docx.py ────────────
+FitExpert_Presentacion_Proyecto.docx
+
+# ── Agentes / harness (herramienta, no código del proyecto) ─
+.agents/
+
+# ── Logs y temporales ───────────────────────────────────────
+*.log
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db

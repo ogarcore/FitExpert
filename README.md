@@ -30,7 +30,7 @@ examen/
 ## Componentes Principales
 
 ### Base de Conocimiento
-- **19 reglas de producción** organizadas por categoría: nutrición, entrenamiento, seguimiento y alertas.
+- **69 reglas de producción** organizadas por categoría: nutrición, entrenamiento, seguimiento y alertas.
 - Representación **Objeto-Atributo-Valor** (OAV).
 
 ### Motor de Inferencia
@@ -91,7 +91,7 @@ python main.py
 - [x] Distribución de macronutrientes por objetivo
 - [x] Plan alimenticio diario (desayuno, almuerzo, cena, snacks)
 - [x] Rutinas de entrenamiento (casa / gimnasio × 3 niveles × 5 objetivos)
-- [x] Motor de inferencia con 19 reglas activas
+- [x] Motor de inferencia con 69 reglas activas
 - [x] Módulo de explicación del razonamiento
 - [x] Historial de consultas (JSON local)
 - [x] Estadísticas del sistema

@@ -35,6 +35,7 @@ from inference_engine import InferenceEngine
 from nutrition import generate_nutrition_plan
 from training import generate_training_plan
 from database import save_profile, list_users, db_stats
+from rich.panel import Panel
 import ui
 
 
@@ -48,11 +49,14 @@ def run_consultation() -> None:
     recopilación de datos → inferencia → presentación → persistencia.
     """
     # 1. Recopilar datos del usuario
-    profile = ui.collect_user_data()
+    with ui.console.status("[bold #4EC9B0]Recopilando tu perfil…[/bold #4EC9B0]"):
+        profile = ui.collect_user_data()
 
     # 2. Ejecutar el motor de inferencia (calcula métricas + aplica reglas)
-    engine = InferenceEngine()
-    engine.run(profile)
+    with ui.console.status("[bold #4EC9B0]Motor de inferencia: evaluando "
+                           "base de hechos y reglas…[/bold #4EC9B0]"):
+        engine = InferenceEngine()
+        engine.run(profile)
 
     # ── Navegación de resultados ──────────────────────────────────────────
 
@@ -61,6 +65,21 @@ def run_consultation() -> None:
     ui.console.print(
         f"\n  [bold green]✓ Evaluación completada para: [bold white]{profile.name}[/bold white][/bold green]\n"
     )
+
+    if profile.red_flags or profile.injury_severity == "aguda":
+        ui.console.print(
+            Panel(
+                "[bold red]🛑 SUSPENSIÓN DE PRESCRIPCIÓN:[/bold red] por señales de "
+                "alarma o lesión aguda declarada, el sistema no prescribe ejercicio. "
+                "Consulta a un profesional de la salud antes de retomar la actividad.",
+                border_style="red",
+            )
+        )
+    if profile.engine_errors:
+        ui.console.print(
+            f"  [bold #FFB020]⚠ {len(profile.engine_errors)} regla(s) con error interno"
+            f" (visible en 'Estadísticas').[/bold #FFB020]"
+        )
 
     sections = [
         ("1", "📊 Métricas físicas (IMC, TMB, TDEE, Calorías)"),
@@ -95,10 +114,14 @@ def run_consultation() -> None:
         if choice == "1":
             ui.show_calculations(profile)
         elif choice == "2":
-            plan = generate_nutrition_plan(profile)
+            with ui.console.status("[bold #4EC9B0]Generando plan nutricional "
+                                   "(filtro de alergias y preferencias)…[/bold #4EC9B0]"):
+                plan = generate_nutrition_plan(profile)
             ui.show_nutrition_plan(plan)
         elif choice == "3":
-            routine = generate_training_plan(profile)
+            with ui.console.status("[bold #4EC9B0]Generando rutina "
+                                   "(matriz de lesiones y filtros biomecánicos)…[/bold #4EC9B0]"):
+                routine = generate_training_plan(profile)
             ui.show_training_plan(routine)
         elif choice == "4":
             ui.show_conclusions(profile)
