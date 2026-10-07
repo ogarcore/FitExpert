@@ -1,820 +1,1549 @@
 """
 gui.py
 ======
-Interfaz web de FitExpert (Streamlit) — v3.0 (auditoría completa)
+FitExpert — Plataforma Web (Streamlit) · v4.0
 
-Mejoras respecto a v2:
-  - Formulario MULTI-PASO con validación por paso (validation.validate_evaluation).
-  - Estados de carga con progreso visible durante el ciclo de inferencia.
-  - Micro-interacciones definidas en design_system.WEB_CSS (stepper, tarjetas
-    que entran en cascada, `prefers-reduced-motion` respetado).
-  - Sin dependencias de red: se eliminó la imagen del sidebar desde CDN.
-  - Corrección del KeyError: las sesiones de entrenamiento exponen `dia/grupo`,
-    no `nombre` (contrato de training.generate_training_plan).
-  - Estadísticas con las claves reales de db_stats (total_sesiones,
-    usuarios_unicos, por_objetivo).
-  - Transparencia del motor: reglas activadas/suprimidas/saltadas/errores,
-    con su severidad, tier, referencias reales y alternativas.
-  - Señales de alarma (red flags) y lesión aguda mostradas con máxima
-    prominencia; el plan se suspende.
-  - Combinación peso×estatura validada (IMC plausible) antes de ejecutar.
+Producto web completo y conectado de principio a fin:
+
+  Landing / Login / Registro → Sesión → Resumen → Evaluación guiada →
+  Plan (nutrición + entrenamiento + explicabilidad) → Historial →
+  Evolución → Perfil (cambio de contraseña) → Cerrar sesión.
+
+Un solo sistema de identidad (`design_system`), la misma lógica, reglas,
+validaciones, motor, nutrición, entrenamiento y persistencia que la app de
+escritorio — y aislamiento real por usuario (cada cuenta ve solo su historial).
+
+Seguridad heredada del núcleo: Argon2id (con migración SHA-256 legada),
+rate limiting anti fuerza bruta y mensajes de error humanos (nunca
+Tracebacks).
 """
 
+import os
 import io
+import tempfile
+from datetime import datetime
+from pathlib import Path
 
-import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import streamlit as st
 
+from auth import login, register, change_password
+from database import (
+    save_profile, get_user_history, get_progress_summary, get_last_session,
+    db_stats,
+)
 from user_profile import (
     UserProfile, OBJECTIVE_LABELS, ACTIVITY_LABELS, EXPERIENCE_LABELS,
     TRAINING_PLACE_LABELS, DIET_TYPES, ALLERGY_OPTIONS, INTOLERANCE_OPTIONS,
     PREFERENCE_OPTIONS, INJURY_OPTIONS, INJURY_SEVERITY_OPTIONS,
-    INJURY_RED_FLAGS, EQUIPMENT_OPTIONS, SEX_OPTIONS, AGE_GROUP_LABELS,
+    INJURY_RED_FLAGS, EQUIPMENT_OPTIONS,
 )
+from validation import validate_evaluation, validate_credentials
+from knowledge_base import RULES, TIER_LABELS
 from inference_engine import InferenceEngine
 from nutrition import generate_nutrition_plan
-from training import generate_training_plan, INJURY_MATRIX
-from database import save_profile, list_users, db_stats
-from knowledge_base import RULES, TIER_LABELS
-from validation import validate_evaluation
-from design_system import (
-    WEB_CSS, badge_html, severity_style, tier_style, CATEGORY_ICON,
-    summary_line, SEVERITY_STYLE,
-)
-
-st.set_page_config(
-    page_title="FitExpert — Sistema Experto de Nutrición y Fitness",
-    page_icon="💪",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.markdown(WEB_CSS, unsafe_allow_html=True)
-
-# ──────────────────────────────────────────────
-#  Estado de sesión web
-# ──────────────────────────────────────────────
-if "fx_step" not in st.session_state:
-    st.session_state.fx_step = 1
-if "fx" not in st.session_state:
-    st.session_state.fx = {}
-if "fx_result" not in st.session_state:
-    st.session_state.fx_result = None
-if "fx_error" not in st.session_state:
-    st.session_state.fx_error = None
+from training import generate_training_plan
+from pdf_exporter import export_pdf
+import design_system as DS
 
 
-def _fx(key: str, default=None):
-    """Lee una clave del formulario persistido entre pasos."""
-    return st.session_state.fx.get(key, default)
+_ASSETS = Path(__file__).resolve().parent / "assets"
+_ICON_FAVICON = str(_ASSETS / "favicon.svg")
+
+_APP_NAME = "FitExpert"
+_APP_TAG = "Nutrición y entrenamiento que se explican"
+_VERSION = "4.0"
+
+# Fuentes científicas del conocimiento
+_SOURCES = ("OMS (WHO)", "CDC", "AAP (Academia Americana de Pediatría)",
+            "ACSM (American College of Sports Medicine)")
+
+# ──────────────────────────────────────────────────────────────
+#  Estado de sesión
+# ──────────────────────────────────────────────────────────────
+
+_WIZARD_STEPS = [
+    ("tú",          "Datos personales"),
+    ("tu plan",     "Objetivo y nivel"),
+    ("tu salud",    "Salud y seguridad"),
+    ("tu comida",   "Nutrición"),
+    ("revisión",    "Revisión final"),
+]
 
 
-def _fx_set(key: str, value):
-    st.session_state.fx[key] = value
+def _defaults() -> None:
+    st.session_state.setdefault("fx_user", None)          # {"user_id","username"}
+    st.session_state.setdefault("fx_page", "inicio")
+    st.session_state.setdefault("fx_step", 1)             # paso del wizard
+    st.session_state.setdefault("fx_step_error", None)
+    st.session_state.setdefault("fx_results", None)       # {"perfil","plan","rutina","warnings"}
+    st.session_state.setdefault("fx_auth_mode", "login")
+    st.session_state.setdefault("fx_hist_sel", 0)
+    st.session_state.setdefault("fx_note_ok", None)
+    st.session_state.setdefault("fx_hi", None)            # mensaje de bienvenida temporal
 
 
-def _defaults(value, options: list) -> list:
-    """Valores por defecto seguros para multiselect (solo los presentes en opciones)."""
-    if not value:
-        return []
-    return [v for v in value if v in options]
+# ──────────────────────────────────────────────────────────────
+#  Utilidades de presentación
+# ──────────────────────────────────────────────────────────────
+
+def _css(extra: str = "") -> None:
+    st.markdown(DS.WEB_CSS + ("<style>" + extra + "</style>" if extra else ""),
+                unsafe_allow_html=True)
 
 
-SEVERITY_SORT = {k: v["order"] for k, v in SEVERITY_STYLE.items()}
+def _auth_css() -> None:
+    # Ocultar sidebar/header mientras no hay sesión: pantalla de acceso limpia.
+    _css("""
+    [data-testid="stSidebar"] { display: none; }
+    header[data-testid="stHeader"] { display: none; }
+    """)
 
-# ──────────────────────────────────────────────
-#  Marca + navegación lateral
-# ──────────────────────────────────────────────
-with st.sidebar:
+
+def _top(icon: str, title: str, sub: str) -> None:
     st.markdown(
-        '<div style="display:flex;align-items:center;gap:0.7rem;margin:0.2rem 0 0.4rem;">'
-        '<div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,'
-        ' #E94E4E, #B2183B);display:flex;align-items:center;justify-content:center;'
-        'font-size:1.5rem;">💪</div>'
-        '<div><div style="font-weight:800;font-size:1.25rem;letter-spacing:-0.01em;">FitExpert</div>'
-        '<div style="color:#9AA8C0;font-size:0.78rem;">Sistema Experto de Nutrición y Fitness</div>'
-        '</div></div>',
+        f'<div class="fx-top-bar"><span class="fx-top-ic">{DS.icon_svg(icon, 22)}</span>'
+        f'<div><div class="fx-h1">{title}</div>'
+        f'<div class="fx-sub" style="margin:0">{sub}</div></div></div>',
         unsafe_allow_html=True,
     )
-    st.sidebar.divider()
-
-    page = st.sidebar.radio(
-        "Navegación",
-        ["Nueva Consulta", "Historial de Consultas", "Acerca del Sistema"],
-        label_visibility="collapsed",
-    )
-    st.sidebar.divider()
-    st.sidebar.caption(
-        f"Motor basado en reglas · **{len(RULES)}** reglas IF/THEN · "
-        "Encadenamiento hacia adelante."
-    )
 
 
-def _render_header(title: str, subtitle: str):
-    st.markdown(f'<div class="fx-hero">{title}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="fx-sub">{subtitle}</div>', unsafe_allow_html=True)
+def _chip(text: str, kind: str = "muted") -> str:
+    return DS.chip_html(text, kind)
 
 
-# ══════════════════════════════════════════════
-#  Helpers
-# ══════════════════════════════════════════════
-
-def age_group_of(age: int) -> str:
-    """Franja de edad canónica (misma lógica que user_profile)."""
-    if 10 <= age <= 12:
-        return "infantil"
-    if 13 <= age <= 17:
-        return "adolescente"
-    if 18 <= age <= 29:
-        return "adulto_joven"
-    if 30 <= age <= 59:
-        return "adulto"
-    if 60 <= age <= 74:
-        return "adulto_mayor"
-    return "adulto_mayor_avanzado"
+def _empty(icon: str, title: str, body: str, cta_label: str | None = None,
+           cta_page: str | None = None) -> None:
+    html = (f'<div class="fx-empty"><div class="ic">{DS.icon_svg(icon, 34)}</div>'
+            f'<div class="fx-h2">{title}</div><p>{body}</p></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if cta_label and cta_page:
+        if st.button(cta_label, key=f"cta_{cta_page}", use_container_width=True):
+            st.session_state.fx_page = cta_page
+            st.rerun()
 
 
-def _go_next(step_actual: int, n_pasos: int):
-    st.session_state.fx_step = min(step_actual + 1, n_pasos)
+def _metric(icon: str, label: str, value: str, sub: str, color: str) -> str:
+    return (f'<div class="fx-metric"><span class="ic">{DS.icon_svg(icon, 18, color)}</span>'
+            f'<div class="l">{label}</div><div class="v" style="color:{color}">{value}</div>'
+            f'<div class="s">{sub}</div></div>')
 
 
-def _go_back(step_actual: int):
-    st.session_state.fx_step = max(step_actual - 1, 1)
+def _imc_color(imc: float) -> str:
+    if imc <= 0:
+        return DS.TEXT_MUTED
+    if imc < 18.5:
+        return DS.ACCENT
+    if imc < 25:
+        return DS.PRIMARY
+    if imc < 30:
+        return DS.GOLD
+    return DS.CRITICAL
 
 
-def _run_evaluation(perfil: UserProfile, advertencias: list):
-    """Ejecuta el motor y guarda el resultado en session_state."""
+def _sev_color(sev: str) -> str:
+    return DS.severity_style(sev)["color"]
+
+
+def _fmt_fecha(ts: str) -> str:
+    try:
+        return datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S").strftime("%d %b %Y")
+    except Exception:
+        return ts or "—"
+
+
+def _foot() -> str:
+    return (f'<div class="fx-footer" style="margin-top:2.2rem;color:var(--fx-faint);'
+            f'font-size:.72rem;line-height:1.6;text-align:center;">'
+            f'FitExpert · Motor basado en reglas ({len(RULES)} reglas) · '
+            f'Fuentes: {", ".join(_SOURCES)}<br>'
+            f'Esto es información orientativa, no sustituye el consejo de un '
+            f'profesional de la salud.</div>')
+
+
+# ──────────────────────────────────────────────────────────────
+#  Gráficas (estilo del sistema)
+# ──────────────────────────────────────────────────────────────
+
+def _style_ax(ax) -> None:
+    ax.set_facecolor(DS.BG_ELEV)
+    ax.tick_params(colors=DS.TEXT_MUTED, labelsize=9)
+    for spine in ax.spines.values():
+        spine.set_color(DS.BORDER)
+    ax.yaxis.grid(True, color=DS.BORDER, linewidth=.7, alpha=.6)
+    ax.xaxis.grid(False)
+
+
+def _fig_evolucion(history: list) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(7.4, 3.0), dpi=110)
+    fig.patch.set_facecolor(DS.BG_ELEV)
+    _style_ax(ax)
+    fechas = [_fmt_fecha(h.get("saved_at", "")) for h in history]
+    pesos = [h.get("weight", 0) for h in history]
+    ax.plot(fechas, pesos, color=DS.PRIMARY, marker="o", linewidth=2.2,
+            markersize=5.5, markerfacecolor=DS.BG_ELEV, markeredgewidth=1.6)
+    ax.set_ylabel("Peso (kg)", color=DS.TEXT_MUTED, fontsize=9)
+    ax.set_ylim(min(pesos) - 3, max(pesos) + 3)
+    for lbl in ax.get_xticklabels():
+        lbl.set_rotation(18)
+    fig.tight_layout(pad=1.2)
+    return fig
+
+
+def _fig_calorias(history: list) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(7.4, 2.7), dpi=110)
+    fig.patch.set_facecolor(DS.BG_ELEV)
+    _style_ax(ax)
+    fechas = [_fmt_fecha(h.get("saved_at", "")) for h in history]
+    kcal = [h.get("target_calories", 0) for h in history]
+    ax.plot(fechas, kcal, color=DS.ACCENT, marker="o", linewidth=2.2,
+            markersize=5.5, markerfacecolor=DS.BG_ELEV, markeredgewidth=1.6)
+    ax.set_ylabel("kcal objetivo", color=DS.TEXT_MUTED, fontsize=9)
+    for lbl in ax.get_xticklabels():
+        lbl.set_rotation(18)
+    fig.tight_layout(pad=1.2)
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────
+#  Motor / persistencia
+# ──────────────────────────────────────────────────────────────
+
+def _run_evaluation(values: dict, warnings: list) -> dict:
+    """Ejecuta motor + nutrición + entrenamiento y guarda la sesión."""
+    perfil = UserProfile(**values)
+    perfil.user_id = st.session_state.fx_user["user_id"]
+    perfil.name = st.session_state.fx_user["username"]
+
     motor = InferenceEngine()
-    motor.run(perfil)
-    save_profile(perfil)
+    with st.status("Analizando tu perfil con el motor de reglas…",
+                   expanded=True) as sts:
+        st.write("Validando 69 reglas IF/THEN de la base de conocimiento…")
+        motor.run(perfil)
+        st.write("Reglas activadas: %d · Suprimidas: %d"
+                 % (len(perfil.conclusions), len(perfil.suppressed)))
 
-    plan_nutricional = generate_nutrition_plan(perfil)
-    rutina = generate_training_plan(perfil)
+        st.write("Construyendo plan nutricional…")
+        plan = generate_nutrition_plan(perfil)
+        st.write("Montando microciclo semanal de entrenamiento…")
+        rutina = generate_training_plan(perfil)
+        sts.update(label="Plan generado. Guardando tu historial…", state="complete")
 
-    st.session_state.fx_result = {
+    resultados = {
         "perfil": perfil,
-        "motor": motor,
-        "plan_nutricional": plan_nutricional,
+        "plan": plan,
         "rutina": rutina,
-        "advertencias": advertencias,
+        "warnings": warnings or [],
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    # Se persiste también el plan, la rutina y las advertencias para que el
+    # plan activo siga disponible tras cerrar/reabrir sesión.
+    save_profile(perfil, extra={
+        "resultados": {
+            "plan": plan,
+            "rutina": rutina,
+            "warnings": warnings or [],
+            "ts": resultados["ts"],
+        },
+    })
+    st.session_state.fx_results = resultados
+    st.session_state.fx_step = 1
+    # El borrador se considera consumido: la próxima "Nueva evaluación"
+    # se vuelve a sembrar desde la última sesión guardada.
+    st.session_state.pop("fx_ev", None)
+    return resultados
+
+
+# ──────────────────────────────────────────────────────────────
+#  Autenticación
+# ──────────────────────────────────────────────────────────────
+
+def _auth_brand_html() -> str:
+    props = [
+        ("inicio", "Un plan único, construido desde tus datos y objetivos"),
+        ("escudo", "Reglas clínicas de fuentes oficiales (OMS, CDC, AAP, ACSM)"),
+        ("explicacion", "Cada decisión del motor se muestra y se explica"),
+    ]
+    items = "".join(
+        f'<div class="fx-prop"><span class="ic">{DS.icon_svg(ic, 18, DS.PRIMARY)}</span>'
+        f'<span>{t}</span></div>' for ic, t in props)
+    return (
+        f'<div class="fx-auth-wrap"><div class="fx-auth">'
+        f'<div class="fx-auth-brand">'
+        f'<div>{DS.brand_svg(46)}</div>'
+        f'<div class="tag">Precisión que<br><b>se explica</b></div>'
+        f'<div class="desc">FitExpert es un sistema experto de nutrición y '
+        f'entrenamiento que genera y explica decisiones personalizadas '
+        f'basadas en reglas clínicas.</div>'
+        f'{items}'
+        f'<div class="foot">Motor de conocimiento: {len(RULES)} reglas IF/THEN · '
+        f'7 jerarquías de severidad · Evaluación guiada en 5 pasos.<br>'
+        f'Fuentes: {", ".join(_SOURCES)}.</div>'
+        f'</div><div class="fx-auth-form">')
+
+
+def _auth_actions() -> str:
+    return "</div></div></div>"
+
+
+def _render_auth() -> None:
+    _auth_css()
+    st.markdown(_auth_brand_html(), unsafe_allow_html=True)
+
+    mode = st.session_state.fx_auth_mode
+    c1, c2 = st.columns(2)
+    with c1:
+        st.button("Entrar", key="am_login", use_container_width=True,
+                  type="primary" if mode == "login" else "secondary",
+                  on_click=lambda: st.session_state.update(fx_auth_mode="login"))
+    with c2:
+        st.button("Crear cuenta", key="am_register", use_container_width=True,
+                  type="primary" if mode == "register" else "secondary",
+                  on_click=lambda: st.session_state.update(fx_auth_mode="register"))
+
+    st.markdown('<div style="height:.6rem"></div>', unsafe_allow_html=True)
+
+    if mode == "login":
+        st.markdown('<div class="title">Bienvenido de nuevo</div>'
+                    '<div class="hint">Accede a tu panel y reevalúa tu plan cuando quieras.</div>',
+                    unsafe_allow_html=True)
+        u = st.text_input("Usuario", key="au_user", placeholder="Tu nombre de usuario")
+        show = st.checkbox("Mostrar contraseña", key="au_show")
+        p = st.text_input("Contraseña", key="au_pass", type="password" if not show else "default",
+                          placeholder="Tu contraseña")
+        st.markdown('<div style="height:.5rem"></div>', unsafe_allow_html=True)
+        if st.button("Acceder al panel", key="au_go", use_container_width=True,
+                     type="primary"):
+            _do_login(u, p)
+    else:
+        st.markdown('<div class="title">Crea tu cuenta</div>'
+                    '<div class="hint">Empieza con tu primera evaluación guiada (10 minutos).</div>',
+                    unsafe_allow_html=True)
+        u = st.text_input("Nombre de usuario", key="ru_user",
+                          placeholder="Sin espacios · mínimo 3 caracteres")
+        show1 = st.checkbox("Mostrar contraseñas", key="ru_show")
+        p = st.text_input("Contraseña", key="ru_pass", type="password" if not show1 else "default",
+                          placeholder="Mínimo 8 caracteres")
+        p2 = st.text_input("Confirmar contraseña", key="ru_pass2",
+                           type="password" if not show1 else "default",
+                           placeholder="Repite tu contraseña")
+        st.markdown('<div style="height:.5rem"></div>', unsafe_allow_html=True)
+        if st.button("Crear cuenta e iniciar", key="ru_go", use_container_width=True,
+                     type="primary"):
+            _do_register(u, p, p2)
+
+    st.markdown('<div class="ok-note">Tus datos se almacenan solo en este equipo · '
+                'Autenticación con Argon2id · Contraseñas nunca en texto plano.</div>',
+                unsafe_allow_html=True)
+    st.markdown(_auth_actions(), unsafe_allow_html=True)
+
+
+def _do_login(u: str, p: str) -> None:
+    checked = validate_credentials(u, p)
+    if not checked["ok"]:
+        st.error(checked["error"])
+        return
+    res = login(checked["username"], checked["password"])
+    if res["ok"]:
+        st.session_state.fx_user = {"user_id": res["user_id"],
+                                    "username": res["username"]}
+        st.session_state.fx_hi = f"Te damos la bienvenida, {res['username']}."
+        st.session_state.fx_page = "inicio"
+        st.rerun()
+    else:
+        st.error(res["error"])
+
+
+def _do_register(u: str, p: str, p2: str) -> None:
+    if p != p2:
+        st.error("Las contraseñas no coinciden.")
+        return
+    checked = validate_credentials(u, p, for_register=True)
+    if not checked["ok"]:
+        st.error(checked["error"])
+        return
+    res = register(checked["username"], checked["password"])
+    if res["ok"]:
+        st.session_state.fx_user = {"user_id": res["user_id"],
+                                    "username": res["username"]}
+        st.session_state.fx_hi = f"Cuenta creada. ¡Bienvenido, {res['username']}!"
+        st.session_state.fx_page = "inicio"
+        st.rerun()
+    else:
+        st.error(res["error"])
+
+
+def _logout() -> None:
+    for k in ("fx_user", "fx_results", "fx_page", "fx_hi", "fx_ev"):
+        st.session_state.pop(k, None)
+    st.session_state.fx_page = "inicio"
+    st.session_state.fx_auth_mode = "login"  # tras salir, la pantalla de acceso abre en "Entrar"
+    st.rerun()
+
+
+# ──────────────────────────────────────────────────────────────
+#  Navegación lateral (post-login)
+# ──────────────────────────────────────────────────────────────
+
+_NAV = [
+    ("Resumen", [
+        ("inicio", "inicio", "Inicio", "Panel general con tu estado y accesos rápidos"),
+    ]),
+    ("Planificación", [
+        ("evaluacion", "nueva", "Nueva evaluación", "Crea o actualiza tu plan en 5 pasos"),
+        ("plan", "plan", "Plan actual", "Nutrición, entrenamiento y decisiones del motor"),
+    ]),
+    ("Seguimiento", [
+        ("historial", "historial", "Historial", "Tus evaluaciones guardadas"),
+        ("progreso", "progreso", "Evolución", "Progreso de peso y calorías en el tiempo"),
+        ("explicacion", "explicacion", "Lógica del experto", "Por qué se tomaron las decisiones"),
+    ]),
+    ("Cuenta", [
+        ("perfil", "perfil", "Perfil", "Datos de tu cuenta y contraseña"),
+        ("libro", "acerca", "Acerca de", "El sistema experto: reglas, fuentes y alcance"),
+    ]),
+]
+
+
+def _sidebar(user: dict) -> None:
+    with st.sidebar:
+        st.markdown(
+            f'<div class="fx-brand">{DS.brand_svg(34, with_name=False)}'
+            f'<div><div style="font-weight:800;font-size:1.02rem;">Fit'
+            f'<span style="color:var(--fx-primary)">Expert</span></div>'
+            f'<div style="color:var(--fx-faint);font-size:.66rem;">Nutrición y entrenamiento</div></div></div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="fx-user"><span class="fx-avatar">{user["username"][:1].upper()}</span>'
+            f'<div style="min-width:0"><div class="fx-uname">{user["username"]}</div>'
+            f'<div class="fx-usub">Sesión activa</div></div></div>',
+            unsafe_allow_html=True)
+
+        current = st.session_state.fx_page
+
+        for group, items in _NAV:
+            st.markdown(f'<div class="fx-nav-label">{group}</div>',
+                        unsafe_allow_html=True)
+            for icon, page, label, help_text in items:
+                c_ic, c_bt = st.columns([0.82, 5.0])
+                active = page == current
+                with c_ic:
+                    st.markdown(
+                        f'<div style="padding-top:.66rem;display:flex;justify-content:center;">'
+                        f'{DS.icon_svg(icon, 17, DS.PRIMARY if active else DS.TEXT_MUTED)}</div>',
+                        unsafe_allow_html=True)
+                with c_bt:
+                    st.button(label, key=f"nav_{page}", use_container_width=True,
+                              type="primary" if active else "secondary",
+                              help=help_text,
+                              on_click=lambda p=page: st.session_state.update(fx_page=p),
+                              disabled=False)
+
+        st.markdown('<div style="height:.4rem"></div>', unsafe_allow_html=True)
+        if st.button("Cerrar sesión", key="nav_salir", use_container_width=True):
+            _logout()
+        st.markdown('<div style="color:var(--fx-faint);font-size:.66rem;'
+                    'text-align:center;margin-top:1rem;">FitExpert v%s</div>' % _VERSION,
+                    unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Resumen
+# ──────────────────────────────────────────────────────────────
+
+def _load_latest_results(user_id: str) -> dict | None:
+    """Reconstruye el plan activo desde la sesión guardada más reciente.
+
+    Tras cerrar/reabrir sesión, `fx_results` ya no está en memoria: se
+    recupera el plan persistido (o, para sesiones antiguas sin resultados
+    guardados, se regenera de forma determinista desde el perfil).
+    """
+    last = get_last_session(user_id)
+    if not last:
+        return None
+    perfil = UserProfile.from_dict(last)
+    saved = last.get("resultados") or {}
+    if saved.get("plan"):
+        return {
+            "perfil": perfil,
+            "plan": saved["plan"],
+            "rutina": saved.get("rutina"),
+            "warnings": saved.get("warnings") or [],
+            "ts": saved.get("ts") or last.get("saved_at", ""),
+        }
+    return {
+        "perfil": perfil,
+        "plan": generate_nutrition_plan(perfil),
+        "rutina": generate_training_plan(perfil),
+        "warnings": [],
+        "ts": last.get("saved_at", ""),
     }
 
 
-def _render_results(res: dict):
-    perfil: UserProfile = res["perfil"]
-    motor: InferenceEngine = res["motor"]
-    plan_nutricional = res["plan_nutricional"]
-    rutina = res["rutina"]
-    advertencias = res["advertencias"]
+def _page_inicio(user: dict) -> None:
+    _top("inicio", "Resumen",
+         "El estado de tu plan y tu progreso, de un vistazo.")
 
-    st.divider()
+    if st.session_state.fx_hi:
+        st.markdown(DS.alert_html("success", st.session_state.fx_hi, ""),
+                    unsafe_allow_html=True)
+        st.session_state.fx_hi = None
+
+    resultado = st.session_state.fx_results or _load_latest_results(user["user_id"])
+    last = get_last_session(user["user_id"])
+    progress = get_progress_summary(user["user_id"])
+
+    # Acceso rápido
+    st.markdown(f'<div class="fx-card fx-card--accent fx-rise">'
+                f'<h3>{DS.icon_svg("evaluacion", 17, DS.PRIMARY)}&nbsp; Tu evaluación</h3>'
+                f'<p>{"Tienes un plan activo generado el " + _fmt_fecha(resultado["perfil"].created_at) if resultado else "Aún no tienes un plan. Tu primera evaluación te dará nutrición, entrenamiento y la explicación de cada decisión."}</p>'
+                f'</div>', unsafe_allow_html=True)
+
+    if not last:
+        _empty("evaluacion", "Comienza tu transformación",
+               "Crea tu primera evaluación guiada: en 5 pasos tendrás un plan "
+               "personalizado de nutrición y entrenamiento.",
+               "Empezar mi primera evaluación", "nueva")
+        st.markdown(_foot(), unsafe_allow_html=True)
+        return
+
+    objetivo = OBJECTIVE_LABELS.get(last.get("objective", ""), last.get("objective", "—"))
     st.markdown(
-        f'<div class="fx-rise"><h3>📊 Resultados para <span style="color:#4EC9B0;">'
-        f'{perfil.name}</span></h3>'
-        f'<div style="color:#9AA8C0;">{summary_line({**motor.summary(), "suppressed": len(motor.suppressed_rules)})}</div></div>',
-        unsafe_allow_html=True,
-    )
+        f'<div class="fx-card fx-card--accent fx-rise"><div class="fx-h2">Tu objetivo actual</div>'
+        f'<p>{DS.icon_svg("objetivo", 16, DS.GOLD)}&nbsp; <b>{objetivo}</b> · '
+        f'última evaluación {_fmt_fecha(last.get("saved_at", ""))}</p></div>',
+        unsafe_allow_html=True)
 
-    # ── Advertencias previas a todo ─────────────────────────────────────
-    if advertencias:
-        with st.expander("ℹ️ Consideraciones detectadas en tus datos", expanded=True):
-            for w in advertencias:
-                st.markdown(f"- {w}")
+    delta_p = progress.get("delta_peso_kg", 0.0)
+    delta_c = progress.get("delta_calorias", 0.0)
+    band = "".join([
+        _metric("historial", "Evaluaciones", str(progress.get("sesiones", 0)),
+                "sesiones guardadas", DS.ACCENT),
+        _metric("progreso", "Variación de peso",
+                f"{'+' if delta_p > 0 else ''}{delta_p:.1f} kg",
+                "entre primera y última", DS.DANGER if delta_p > 0 else DS.SUCCESS),
+        _metric("calendario", "Ajuste calórico",
+                f"{'+' if delta_c > 0 else ''}{delta_c:.0f} kcal",
+                "objetivo medio", DS.VIOLET),
+    ])
+    st.markdown(f'<div class="fx-band">{band}</div>', unsafe_allow_html=True)
+
+    col_a, col_b = st.columns([1.4, 1])
+    with col_a:
+        st.markdown(f'<div class="fx-h2">Tu plan actual</div>', unsafe_allow_html=True)
+        if resultado:
+            pp = resultado["perfil"]
+            pn = resultado["plan"]
+            rt = resultado["rutina"]
+            macros = pn.get("macros", {})
+            imc_cat = _imc_color(pp.imc)
+            st.markdown(
+                f'<div class="fx-card"><div class="fx-muted" style="font-size:.74rem;">'
+                f'Resumen del plan</div>'
+                f'<div class="fx-h2" style="margin:.2rem 0 .6rem;">{OBJECTIVE_LABELS.get(pp.objective, pp.objective)}</div>'
+                f'<div style="display:flex;gap:.5rem;flex-wrap:wrap;">'
+                f'{_chip(f"IMC {pp.imc:.1f}", "primary")}'
+                f'{_chip(f"{pp.tdee:.0f} kcal/día", "info")}'
+                f'{_chip(rt.get("nombre", "Rutina"), "ok")}'
+                f'{_chip(f"{DIET_TYPES.get(pp.diet_type, pp.diet_type)}", "muted")}'
+                f'</div>'
+                f'<div class="fx-track"><div class="fx-fill" style="width:30%"></div></div>'
+                f'<p style="margin-top:.5rem;">Proteínas {macros.get("proteinas", 0)} g · '
+                f'Carbohidratos {macros.get("carbohidratos", 0)} g · '
+                f'Grasas {macros.get("grasas", 0)} g</p></div>',
+                unsafe_allow_html=True)
+            if st.button("Ver mi plan completo", key="ds_plan",
+                         use_container_width=True):
+                st.session_state.fx_page = "plan"
+                st.rerun()
+        else:
+            _empty("plan", "Sin plan activo",
+                   "Genera una evaluación para ver aquí tu resumen.",
+                   "Crear evaluación", "nueva")
+
+    with col_b:
+        st.markdown('<div class="fx-h2">Evolución de peso</div>', unsafe_allow_html=True)
+        history = get_user_history(user["user_id"])
+        if len(history) >= 2:
+            st.pyplot(_fig_evolucion(history), clear_figure=True)
+        else:
+            _empty("progreso", "Aún no hay curva",
+                   "Necesitas al menos 2 evaluaciones para ver tu evolución.")
+
+    if resultado and (resultado["perfil"].red_flags
+                      or resultado["perfil"].injury_severity == "aguda"):
+        st.markdown(DS.alert_html(
+            "danger", "Suspensión de prescripción de ejercicio",
+            "Se detectaron señales de alarma o una lesión aguda. FitExpert no "
+            "prescribe ejercicio: consulta a un profesional de la salud antes "
+            "de retomar la actividad física."), unsafe_allow_html=True)
+
+    st.markdown(_foot(), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Nueva evaluación (wizard de 5 pasos)
+# ──────────────────────────────────────────────────────────────
+
+def _ev_defs(user: dict) -> dict:
+    """Valores por defecto del formulario, prellenados con la última sesión."""
+    last = get_last_session(user["user_id"]) or {}
+    return {
+        "ev_name": user["username"],
+        "ev_age": last.get("age", 25),
+        "ev_sex": "Femenino" if last.get("sex") == "femenino" else "Masculino",
+        "ev_weight": float(last.get("weight", 70.0)),
+        "ev_height": float(last.get("height", 172.0)),
+        "ev_bodyfat": float(last.get("body_fat_pct", 0) or 0.0),
+        "ev_objective": OBJECTIVE_LABELS.get(last.get("objective", "mantenimiento"),
+                                             list(OBJECTIVE_LABELS.values())[4]),
+        "ev_activity": ACTIVITY_LABELS.get(last.get("activity_level", "ligero"),
+                                           list(ACTIVITY_LABELS.values())[1]),
+        "ev_exp": EXPERIENCE_LABELS.get(last.get("experience", "principiante"),
+                                        list(EXPERIENCE_LABELS.values())[0]),
+        "ev_place": TRAINING_PLACE_LABELS.get(last.get("training_place", "casa")),
+        "ev_equip": [EQUIPMENT_OPTIONS.get(k) for k in (last.get("equipment", []) or [])
+                     if k in EQUIPMENT_OPTIONS],
+        "ev_freq": f"{last.get('meal_frequency', 3)} comidas",
+        "ev_inj": [INJURY_OPTIONS.get(x, x) for x in (last.get("injuries", []) or [])],
+        "ev_sev": INJURY_SEVERITY_OPTIONS.get(last.get("injury_severity", "ninguna"),
+                                              list(INJURY_SEVERITY_OPTIONS.values())[0]),
+        "ev_bal": bool(last.get("balance_issues", False)),
+        "ev_rf": [INJURY_RED_FLAGS.get(x, x) for x in (last.get("red_flags", []) or [])],
+        "ev_notes": last.get("notes", ""),
+        "ev_diet": DIET_TYPES.get(last.get("diet_type", "omnivoro"),
+                                  list(DIET_TYPES.values())[0]),
+        "ev_alg": [ALLERGY_OPTIONS.get(x, x) for x in (last.get("allergies", []) or [])],
+        "ev_int": [INTOLERANCE_OPTIONS.get(x, x) for x in (last.get("intolerances", []) or [])],
+        "ev_pref": [PREFERENCE_OPTIONS.get(x, x) for x in (last.get("preferences", []) or [])],
+    }
+
+
+def _stepper_html(step: int) -> str:
+    total = len(_WIZARD_STEPS)
+    parts = []
+    for i, (_, label) in enumerate(_WIZARD_STEPS, 1):
+        if i < step:
+            inner = DS.icon_svg("check", 11, DS.SUCCESS, 2.6)
+            cls = "done"
+        elif i == step:
+            inner = f'<span class="n">{i}</span>'
+            cls = "active"
+        else:
+            inner = f'<span class="n">{i}</span>'
+            cls = ""
+        parts.append(f'<div class="fx-step {cls}">{inner}<span class="lbl">{label}</span></div>')
+        if i < total:
+            parts.append('<div style="width:12px;height:1px;background:var(--fx-border);flex:none;"></div>')
+    return '<div class="fx-stepper">' + "".join(parts) + "</div>"
+
+
+# Claves de widget del asistente por paso. Los widgets con clave se limpian
+# de session_state en cuanto dejan de renderizarse, así que antes de cambiar de
+# paso absorbemos sus valores al dict durable "fx_ev".
+_WIZARD_KEYS = {
+    1: ["ev_age", "ev_sex", "ev_weight", "ev_height", "ev_bodyfat"],
+    2: ["ev_objective", "ev_exp", "ev_freq", "ev_activity", "ev_place",
+        "ev_equip"],
+    3: ["ev_inj", "ev_sev", "ev_bal", "ev_rf", "ev_notes"],
+    4: ["ev_diet", "ev_alg", "ev_int", "ev_pref"],
+    5: ["ev_notes2"],
+}
+
+
+def _ensure_ev(user: dict) -> None:
+    """Crea el borrador durable del asistente (fx_ev) y lo siembra una sola vez."""
+    fx = st.session_state.setdefault("fx_ev", {})
+    if "ev_name" not in fx:
+        fx.update(_ev_defs(user))
+
+
+def _absorb_step(step: int) -> None:
+    """Copia los widgets del paso actual a fx_ev antes de abandonarlo."""
+    fx = st.session_state.setdefault("fx_ev", {})
+    for key in _WIZARD_KEYS.get(step, []):
+        if key in st.session_state:
+            fx[key] = st.session_state[key]
+
+
+def _field_source() -> dict:
+    """Instancia coherente de los valores del asistente (borrador durable)."""
+    return dict(st.session_state.get("fx_ev", {}))
+
+
+def _page_nueva(user: dict) -> None:
+    _top("evaluacion", "Nueva evaluación",
+         "Cinco pasos guiados con validación en cada uno. Nada se pierde si cambias de página.")
+
+    # Borrador durable: siembra una sola vez, sobrevive a cambios de página
+    _ensure_ev(user)
+    fx = st.session_state.fx_ev
+
+    step = st.session_state.fx_step
+    st.markdown(_stepper_html(step), unsafe_allow_html=True)
+
+    if st.session_state.fx_step_error:
+        st.error(st.session_state.fx_step_error)
+        st.session_state.fx_step_error = None
+
+    if step == 1:
+        st.markdown('<div class="fx-h2">Datos personales</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("Edad (años)", 10, 100, step=1, key="ev_age",
+                            value=int(fx.get("ev_age", 25)))
+            st.number_input("Peso (kg)", 30.0, 300.0, step=0.1, key="ev_weight",
+                            value=float(fx.get("ev_weight", 70.0)))
+        with c2:
+            st.selectbox("Sexo", ["Masculino", "Femenino"], key="ev_sex",
+                         index=_opt_index(["Masculino", "Femenino"],
+                                          fx.get("ev_sex", "Masculino")))
+            st.number_input("Estatura (cm)", 100.0, 250.0, step=0.5, key="ev_height",
+                            value=float(fx.get("ev_height", 172.0)))
+        st.number_input("Porcentaje de grasa corporal (opcional — 0 si lo desconoces)",
+                        0.0, 70.0, step=0.1, key="ev_bodyfat",
+                        value=float(fx.get("ev_bodyfat", 0.0) or 0.0))
+
+    elif step == 2:
+        st.markdown('<div class="fx-h2">Objetivo y preparación</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.selectbox("Objetivo principal", list(OBJECTIVE_LABELS.values()),
+                         key="ev_objective",
+                         index=_opt_index(list(OBJECTIVE_LABELS.values()),
+                                          fx.get("ev_objective",
+                                          list(OBJECTIVE_LABELS.values())[4])))
+            st.selectbox("Experiencia", list(EXPERIENCE_LABELS.values()), key="ev_exp",
+                         index=_opt_index(list(EXPERIENCE_LABELS.values()),
+                                          fx.get("ev_exp",
+                                          list(EXPERIENCE_LABELS.values())[0])))
+            st.selectbox("Comidas al día", ["3 comidas", "4 comidas", "5 comidas"],
+                         key="ev_freq",
+                         index=_opt_index(["3 comidas", "4 comidas", "5 comidas"],
+                                          fx.get("ev_freq", "3 comidas")))
+        with c2:
+            st.selectbox("Nivel de actividad diaria", list(ACTIVITY_LABELS.values()),
+                         key="ev_activity",
+                         index=_opt_index(list(ACTIVITY_LABELS.values()),
+                                          fx.get("ev_activity",
+                                          list(ACTIVITY_LABELS.values())[1])))
+            st.selectbox("Lugar de entrenamiento", list(TRAINING_PLACE_LABELS.values()),
+                         key="ev_place",
+                         index=_opt_index(list(TRAINING_PLACE_LABELS.values()),
+                                          fx.get("ev_place",
+                                          TRAINING_PLACE_LABELS["casa"])))
+        if st.session_state.get("ev_place") == TRAINING_PLACE_LABELS["casa"]:
+            st.multiselect(
+                "Equipo disponible en casa",
+                list(EQUIPMENT_OPTIONS.values()), key="ev_equip",
+                default=_defaults_in(fx.get("ev_equip", []),
+                                     list(EQUIPMENT_OPTIONS.values())),
+                format_func=lambda x: x)
+        else:
+            st.session_state.pop("ev_equip", None)
+            fx["ev_equip"] = []
+            st.caption("Entrenarás en gimnasio: no se requiere listar equipo propio.")
+
+    elif step == 3:
+        st.markdown('<div class="fx-h2">Salud y seguridad</div>', unsafe_allow_html=True)
+        inj_labels = list(INJURY_OPTIONS.values())
+        st.multiselect("Zonas con molestia o lesión", inj_labels, key="ev_inj",
+                       default=_defaults_in(fx.get("ev_inj", []), inj_labels))
+        st.selectbox("Intensidad de las molestias", list(INJURY_SEVERITY_OPTIONS.values()),
+                     key="ev_sev",
+                     index=_opt_index(list(INJURY_SEVERITY_OPTIONS.values()),
+                                      fx.get("ev_sev",
+                                      list(INJURY_SEVERITY_OPTIONS.values())[0])))
+        st.checkbox("Problemas de equilibrio / historial de caídas", key="ev_bal",
+                    value=bool(fx.get("ev_bal", False)))
+
+        st.markdown(DS.alert_html(
+            "danger",
+            "Señales de alarma (suspenden la prescripción de ejercicio)",
+            "Selecciona cualquiera de estas señales si está presente: el sistema "
+            "no generará rutina y te pedirá evaluación profesional."),
+            unsafe_allow_html=True)
+        st.multiselect("Señales de alarma", list(INJURY_RED_FLAGS.values()), key="ev_rf",
+                       default=_defaults_in(fx.get("ev_rf", []),
+                                            list(INJURY_RED_FLAGS.values())))
+        st.text_area("Observaciones (opcional)", key="ev_notes",
+                     max_chars=300, value=str(fx.get("ev_notes", "") or ""),
+                     placeholder="Cualquier detalle que quieras que el plan considere…")
+
+    elif step == 4:
+        st.markdown('<div class="fx-h2">Nutrición</div>', unsafe_allow_html=True)
+        st.selectbox("Tipo de dieta", list(DIET_TYPES.values()), key="ev_diet",
+                     index=_opt_index(list(DIET_TYPES.values()),
+                                      fx.get("ev_diet", list(DIET_TYPES.values())[0])))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.multiselect("Alergias (exclusión estricta)",
+                           list(ALLERGY_OPTIONS.values()), key="ev_alg",
+                           default=_defaults_in(fx.get("ev_alg", []),
+                                                list(ALLERGY_OPTIONS.values())))
+        with c2:
+            st.multiselect("Intolerancias (se evitan fuentes principales)",
+                           list(INTOLERANCE_OPTIONS.values()), key="ev_int",
+                           default=_defaults_in(fx.get("ev_int", []),
+                                                list(INTOLERANCE_OPTIONS.values())))
+        st.multiselect("Preferencias de consumo",
+                       list(PREFERENCE_OPTIONS.values()), key="ev_pref",
+                       default=_defaults_in(fx.get("ev_pref", []),
+                                            list(PREFERENCE_OPTIONS.values())))
+
+    else:  # paso 5 — revisión
+        st.markdown('<div class="fx-h2">Revisión final</div>', unsafe_allow_html=True)
+        _review_summary(_field_source())
+        st.text_area("Observaciones finales (opcional)", key="ev_notes2",
+                     max_chars=300, value=str(fx.get("ev_notes2", "") or ""))
+
+    # Navegación del asistente
+    st.markdown('<div style="height:.6rem"></div>', unsafe_allow_html=True)
+    c_prev, c_next = st.columns([1, 2])
+    with c_prev:
+        if step > 1 and st.button("Volver", key="wz_back", use_container_width=True):
+            st.session_state.fx_step = max(1, step - 1)
+            st.rerun()
+    with c_next:
+        if step < 5:
+            if st.button("Continuar", key="wz_next", use_container_width=True,
+                         type="primary"):
+                _advance_step(step, user)
+        else:
+            if st.button("Generar mi plan", key="wz_gen", use_container_width=True,
+                         type="primary"):
+                _generate(user)
+
+
+def _defaults_in(raw, options) -> list:
+    """Filtra candidatos de default contra las opciones válidas del widget.
+
+    Protección de doble vía: aunque en `fx_ev` llegue una clave canónica o un
+    valor rejugado desde el cliente (compatibilidad legada), el multiselect
+    nunca recibe un default fuera de sus opciones (evita StreamlitAPIException).
+    """
+    opts = set(options)
+    return [v for v in (raw or []) if v in opts]
+
+
+def _review_summary(s: dict) -> None:
+    def rev(icon, label, value):
+        return (f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
+                f'padding:.42rem 0;border-bottom:1px dashed var(--fx-border);font-size:.87rem;">'
+                f'<span style="color:var(--fx-muted);display:inline-flex;gap:.4rem;">'
+                f'{DS.icon_svg(icon, 15, DS.TEXT_MUTED)} {label}</span>'
+                f'<b>{value}</b></div>')
+    st.markdown(
+        '<div class="fx-card">' 
+        + rev("perfil", "Edad / Sexo", f'{s.get("ev_age")} años · {s.get("ev_sex")}')
+        + rev("perfil", "Peso / Estatura", f'{s.get("ev_weight")} kg · {s.get("ev_height")} cm')
+        + rev("objetivo", "Objetivo", s.get("ev_objective"))
+        + rev("progreso", "Actividad", s.get("ev_activity"))
+        + rev("entrenamiento", "Experiencia", s.get("ev_exp"))
+        + rev("inicio", "Lugar", s.get("ev_place"))
+        + rev("nutricion", "Dieta", s.get("ev_diet"))
+        + rev("nutricion", "Comidas / día", s.get("ev_freq"))
+        + rev("salud", "Lesiones", ", ".join(s.get("ev_inj") or ["Ninguna"]) or "Ninguna")
+        + rev("salud", "Alergias", ", ".join(s.get("ev_alg") or ["Ninguna"]) or "Ninguna")
+        + rev("salud", "Intolerancias", ", ".join(s.get("ev_int") or ["Ninguna"]) or "Ninguna")
+        + '</div>', unsafe_allow_html=True)
+
+
+def _map_selection(x: str, domain: dict) -> str | None:
+    """Traduce la etiqueta humana elegida a la clave canónica del dominio."""
+    for key, human in domain.items():
+        if human == x:
+            return key
+    for key, human in domain.items():
+        if isinstance(human, str) and human.lower() == str(x).lower():
+            return key
+    return None
+
+
+def _opt_index(options: list, value) -> int:
+    """Índice del valor guardado dentro de las opciones de un selectbox."""
+    try:
+        return options.index(value)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _advance_step(step: int, user: dict) -> None:
+    _absorb_step(step)  # persiste el paso actual antes de abandonarlo
+    if step == 1:
+        checks = ["ev_age", "ev_weight", "ev_height", "ev_bodyfat"]
+    elif step == 2:
+        checks = ["ev_freq"]
+    else:
+        st.session_state.fx_step = step + 1
+        st.rerun()
+        return
+
+    from validation import (validate_age, validate_weight, validate_height,
+                            validate_body_fat, validate_meal_frequency)
+    labels = {"ev_age": "edad", "ev_weight": "peso", "ev_height": "estatura",
+              "ev_bodyfat": "% de grasa", "ev_freq": "frecuencia de comidas"}
+    validators = {"ev_age": validate_age, "ev_weight": validate_weight,
+                  "ev_height": validate_height, "ev_bodyfat": validate_body_fat,
+                  "ev_freq": validate_meal_frequency}
+
+    errors = []
+    for key in checks:
+        raw = st.session_state.get(key)
+        if key == "ev_freq":
+            try:
+                raw = int(str(raw or "3")[0])
+            except (TypeError, ValueError):
+                raw = None
+        res = validators[key](raw)
+        if not res.ok:
+            errors.append(f"• {labels.get(key, key)}: {res.error}")
+    if errors:
+        st.session_state.fx_step_error = "Revisa los siguientes campos:\n" + "\n".join(errors)
+        st.rerun()
+        return
+    st.session_state.fx_step = step + 1
+    st.rerun()
+
+
+def _generate(user: dict) -> None:
+    _absorb_step(st.session_state.fx_step)  # captura observaciones finales
+    s = _field_source()
+
+    def canon(labels: list, domain: dict) -> list:
+        out = []
+        for lab in labels:
+            k = _map_selection(lab, domain)
+            if k:
+                out.append(k)
+        return out
+
+    token = {k: v for k, v in INJURY_SEVERITY_OPTIONS.items()}
+    severidad = _map_selection(s.get("ev_sev", ""), INJURY_SEVERITY_OPTIONS) or "ninguna"
+
+    # Dominios invertidos etiqueta → clave
+    inj_dom = {v: k for k, v in INJURY_OPTIONS.items()}
+    rf_dom = {v: k for k, v in INJURY_RED_FLAGS.items()}
+    eq_dom = {v: k for k, v in EQUIPMENT_OPTIONS.items()}
+    alg_dom = {v: k for k, v in ALLERGY_OPTIONS.items()}
+    int_dom = {v: k for k, v in INTOLERANCE_OPTIONS.items()}
+    pref_dom = {v: k for k, v in PREFERENCE_OPTIONS.items()}
+
+    data = {
+        "name": s.get("ev_name", user["username"]),
+        "age": s.get("ev_age"),
+        "sex": "femenino" if s.get("ev_sex") == "Femenino" else "masculino",
+        "weight": s.get("ev_weight"),
+        "height": s.get("ev_height"),
+        "body_fat_pct": s.get("ev_bodyfat", 0),
+        "objective": _map_selection(s.get("ev_objective"), OBJECTIVE_LABELS),
+        "activity_level": _map_selection(s.get("ev_activity"), ACTIVITY_LABELS),
+        "experience": _map_selection(s.get("ev_exp"), EXPERIENCE_LABELS),
+        "training_place": _map_selection(s.get("ev_place"), TRAINING_PLACE_LABELS),
+        "diet_type": _map_selection(s.get("ev_diet"), DIET_TYPES),
+        "meal_frequency": int(str(s.get("ev_freq"))[0]),
+        "injuries": [inj_dom.get(l) for l in (s.get("ev_inj") or []) if inj_dom.get(l)],
+        "injury_severity": severidad,
+        "balance_issues": bool(s.get("ev_bal")),
+        "red_flags": [rf_dom.get(l) for l in (s.get("ev_rf") or []) if rf_dom.get(l)],
+        "equipment": [eq_dom.get(l) for l in (s.get("ev_equip") or []) if eq_dom.get(l)],
+        "allergies": [alg_dom.get(l) for l in (s.get("ev_alg") or []) if alg_dom.get(l)],
+        "intolerances": [int_dom.get(l) for l in (s.get("ev_int") or []) if int_dom.get(l)],
+        "preferences": [pref_dom.get(l) for l in (s.get("ev_pref") or []) if pref_dom.get(l)],
+        "notes": s.get("ev_notes2") or s.get("ev_notes") or "",
+    }
+
+    # La casa sin equipo declarado siempre tiene peso corporal disponible
+    if not data["equipment"]:
+        data["equipment"] = ["solo_peso_corporal"]
+
+    values, errores, warnings = validate_evaluation(data)
+    if errores:
+        cuerpo = "\n".join(f"• {campo}: {msg}" for campo, msg in errores.items())
+        st.session_state.fx_step_error = "Datos incompletos — revisa:\n\n" + cuerpo
+        st.session_state.fx_step = 1
+        st.rerun()
+        return
+
+    resultados = _run_evaluation(values, warnings)
+    st.session_state.fx_page = "plan"
+    st.rerun()
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Plan actual (resultados)
+# ──────────────────────────────────────────────────────────────
+
+def _macros_bars(macros: dict, kcal: float) -> str:
+    total = max(float(macros.get("proteinas", 0)) * 4 +
+                float(macros.get("carbohidratos", 0)) * 4 +
+                float(macros.get("grasas", 0)) * 9, 1)
+    p = float(macros.get("proteinas", 0))
+    c = float(macros.get("carbohidratos", 0))
+    g = float(macros.get("grasas", 0))
+    pw, cw, gw = p * 4 / total * 100, c * 4 / total * 100, g * 9 / total * 100
+
+    def bar(label, grams, pct, color):
+        return (f'<div class="fx-macro"><div class="row"><span>{label}</span>'
+                f'<b>{grams:.0f} g · {pct:.0f}%</b></div>'
+                f'<div class="fx-track"><div class="fx-fill" style="width:{min(pct,100):.0f}%;'
+                f'background:{color};"></div></div></div>')
+    return bar("Proteínas", p, pw, DS.PRIMARY) + bar("Carbohidratos", c, cw, DS.ACCENT) \
+        + bar("Grasas", g, gw, DS.GOLD)
+
+
+def _meal_card(name: str, items: list) -> str:
+    lis = "".join(f'<div class="fx-ex"><span class="nm">{it}</span></div>' for it in items)
+    return (f'<div class="fx-day"><div class="hd"><span class="dayname">{name}</span>'
+            f'</div>{lis}</div>')
+
+
+def _page_plan(user: dict) -> None:
+    _top("plan", "Plan actual", "Tu nutrición, tu entrenamiento y el razonamiento del experto.")
+    res = st.session_state.fx_results or _load_latest_results(user["user_id"])
+
+    if not res:
+        _empty("plan", "Sin plan activo",
+               "Genera una nueva evaluación para construir tu plan personalizado.",
+               "Crear evaluación", "nueva")
+        st.markdown(_foot(), unsafe_allow_html=True)
+        return
+
+    perfil = res["perfil"]
+    plan = res["plan"]
+    rutina = res["rutina"]
+    warnings = res["warnings"]
+
+    # Acciones de cabecera
+    c1, c2, c3 = st.columns([2.4, 1, 1])
+    with c1:
+        st.markdown(f'<div class="fx-muted" style="font-size:.78rem;">'
+                    f'{perfil.name} · generado el {_fmt_fecha(perfil.created_at)}'
+                    f'</div>', unsafe_allow_html=True)
+    with c2:
+        _btn_pdf(perfil, plan, rutina)
+    with c3:
+        if st.button("Nueva evaluación", key="pl_nueva",
+                     use_container_width=True):
+            st.session_state.fx_page = "nueva"
+            st.rerun()
 
     if perfil.red_flags or perfil.injury_severity == "aguda":
-        st.error(
-            "**Suspensión de prescripción por seguridad.** Con señales de alarma "
-            "o lesión aguda declarada, FitExpert no genera ejercicios. Consulta a "
-            "un profesional de la salud antes de retomar la actividad física."
-        )
+        st.markdown(DS.alert_html(
+            "danger", "Suspensión de prescripción de ejercicio",
+            "Por señales de alarma o lesión aguda, FitExpert no prescribe rutina. "
+            "La parte nutricional puede consultarse; antes de entrenar, acude a "
+            "un profesional de la salud."), unsafe_allow_html=True)
 
-    if perfil.engine_errors:
-        with st.expander("🔧 Errores internos de evaluación (auditoría)", expanded=False):
-            for e in perfil.engine_errors:
-                st.code(f"[{e['id']}] {e['error']}")
+    if warnings:
+        cuerpo = "<br>".join("• " + w for w in warnings[:6])
+        st.markdown(DS.alert_html("warn", "Consideraciones de seguridad",
+                                  cuerpo), unsafe_allow_html=True)
 
-    # ── Métricas base ───────────────────────────────────────────────────
-    m1, m2, m3, m4 = st.columns(4)
-    m1.markdown(
-        f'<div class="fx-metric"><div class="v">{perfil.imc:.1f}</div>'
-        f'<div class="l">IMC</div><div class="s">{perfil.imc_category}</div></div>',
-        unsafe_allow_html=True,
-    )
-    m2.markdown(
-        f'<div class="fx-metric"><div class="v">{perfil.tmb:.0f}</div>'
-        f'<div class="l">TMB · reposo</div><div class="s">kcal/día</div></div>',
-        unsafe_allow_html=True,
-    )
-    m3.markdown(
-        f'<div class="fx-metric"><div class="v">{perfil.tdee:.0f}</div>'
-        f'<div class="l">TDEE · gasto</div><div class="s">kcal/día</div></div>',
-        unsafe_allow_html=True,
-    )
-    m4.markdown(
-        f'<div class="fx-metric"><div class="v">{perfil.target_calories:.0f}</div>'
-        f'<div class="l">Calorías objetivo</div>'
-        f'<div class="s">{"↑ " if perfil.caloric_adjustment > 0 else "↓ " if perfil.caloric_adjustment < 0 else ""}'
-        f'{perfil.caloric_adjustment:+.0f} kcal ajuste</div></div>',
-        unsafe_allow_html=True,
-    )
-    if perfil.adjustment_capped:
-        st.caption(f"🔒 El ajuste calórico fue limitado por seguridad: {perfil.adjustment_reason}")
-
-    # ── Pestañas de contenido ────────────────────────────────────────────
-    tab_nutricion, tab_entreno, tab_expert, tab_hechos = st.tabs([
-        "🥗 Plan Nutricional",
-        "🏋️ Plan de Entrenamiento",
-        "💡 Módulo de Explicación",
-        "🗂️ Base de Hechos (O-A-V)",
+    # Bandas de métricas
+    band = "".join([
+        _metric("salud", "IMC", f"{perfil.imc:.1f}", perfil.imc_category,
+                _imc_color(perfil.imc)),
+        _metric("cronometro", "TMB", f"{perfil.tmb:.0f}", "kcal en reposo", DS.ACCENT),
+        _metric("progreso", "TDEE", f"{perfil.tdee:.0f}", "gasto total estimado", DS.PRIMARY),
+        _metric("objetivo", "Meta diaria", f"{perfil.target_calories:.0f}",
+                "kcal objetivo", DS.GOLD),
     ])
+    st.markdown(f'<div class="fx-band">{band}</div>', unsafe_allow_html=True)
 
-    with tab_nutricion:
-        macros = plan_nutricional["macros"] or {}
-        sk, h = st.columns([1, 2])
-        with sk:
-            st.subheader("Macronutrientes")
-            if macros.get("proteinas"):
-                st.metric("Proteínas", f"{macros['proteinas']:.0f} g", f"{macros.get('p_pct', 0):.0f}%")
-            if macros.get("carbohidratos"):
-                st.metric("Carbohidratos", f"{macros['carbohidratos']:.0f} g", f"{macros.get('c_pct', 0):.0f}%")
-            if macros.get("grasas"):
-                st.metric("Grasas", f"{macros['grasas']:.0f} g", f"{macros.get('g_pct', 0):.0f}%")
-            if plan_nutricional.get("proteina_recomendada"):
-                pr = plan_nutricional["proteina_recomendada"]
-                if isinstance(pr, dict):
-                    st.metric("Proteína objetivo", f"{pr.get('recomendada_g', pr.get('g', 0)):.0f} g/día")
-                else:
-                    st.caption(f"Proteína objetivo: {pr}")
-            st.caption(
-                f"{plan_nutricional['frecuencia']} comidas/día · "
-                f"Dieta: {DIET_TYPES.get(plan_nutricional['tipo_dieta'])}"
-            )
-        with h:
-            st.subheader("Sugerencias de comidas")
-            plan = plan_nutricional["plan"]
-            col_a, col_b = st.columns(2)
-            with col_a:
-                with st.expander("🌅 Desayuno", expanded=True):
-                    for texto in plan["desayuno"]:
-                        st.markdown(f"- {texto}")
-                with st.expander("☀️ Almuerzo", expanded=True):
-                    for texto in plan["almuerzo"]:
-                        st.markdown(f"- {texto}")
-            with col_b:
-                with st.expander("🌙 Cena", expanded=True):
-                    for texto in plan["cena"]:
-                        st.markdown(f"- {texto}")
-                with st.expander("🍎 Tentempiés", expanded=True):
-                    for texto in plan["snacks"]:
-                        st.markdown(f"- {texto}")
-            st.info(f"💧 **Hidratación:** {plan['hidratacion']}")
+    tab_nut, tab_trn, tab_exp = st.tabs(
+        ["Nutrición", "Entrenamiento", "Decisiones del experto"])
 
-        if plan_nutricional.get("sustituciones"):
-            with st.expander("🔁 Sustituciones por alergias declaradas"):
-                for s in plan_nutricional["sustituciones"]:
+    # ── Nutrición ──────────────────────────────────────────────
+    with tab_nut:
+        c_mac, c_meals = st.columns([1, 1.7])
+        with c_mac:
+            st.markdown(
+                f'<div class="fx-card fx-card--accent"><div class="fx-h2">Distribución de macronutrientes</div>'
+                f'{_macros_bars(plan.get("macros", {}), perfil.target_calories)}'
+                f'<p>Meta diaria: <b>{perfil.target_calories:.0f} kcal</b> · '
+                f'Hidratación recomendada: <b>{plan.get("plan", {}).get("hidratacion", "—")}</b></p>'
+                f'</div>', unsafe_allow_html=True)
+        with c_meals:
+            st.markdown('<div class="fx-h2">Menú recomendado</div>', unsafe_allow_html=True)
+            _plan = plan.get("plan", {})
+            for name, key in (("Desayuno", "desayuno"), ("Almuerzo", "almuerzo"),
+                              ("Cena", "cena"), ("Snacks", "snacks")):
+                items = _plan.get(key) or []
+                if items:
+                    st.markdown(_meal_card(name, items), unsafe_allow_html=True)
+
+        sustituciones = plan.get("sustituciones") or []
+        if sustituciones:
+            st.markdown('<div class="fx-h2">Sustituciones por alergias / intolerancias</div>',
+                        unsafe_allow_html=True)
+            for su in sustituciones:
+                al = ALLERGY_OPTIONS.get(su.get("alergeno", ""), su.get("alergeno", "—"))
+                st.markdown(DS.alert_html(
+                    "violet", f"Alergia a {al}",
+                    str(su.get("substitucion", ""))), unsafe_allow_html=True)
+            st.markdown(
+                '<div class="fx-small">La seguridad frente a contaminación cruzada '
+                'depende de leer siempre las etiquetas de los productos.</div>',
+                unsafe_allow_html=True)
+
+    # ── Entrenamiento ──────────────────────────────────────────
+    with tab_trn:
+        dias = rutina.get("semana", [])
+        activos = [d for d in dias if not d.get("descanso")]
+        chip_dias = _chip(f"{rutina.get('dias', '')} sesiones/semana", "info")
+        st.markdown(
+            f'<div class="fx-card fx-card--accent"><div class="fx-h2">{rutina.get("nombre", "Rutina").upper()}</div>'
+            f'<p>{rutina.get("tipo", "")} · {len(activos)} días de entrenamiento de {len(dias)} '
+            f'de la semana · {chip_dias}</p>'
+            f'</div>', unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+        for i, day in enumerate(dias):
+            with (col1 if i % 2 == 0 else col2):
+                if day.get("descanso"):
                     st.markdown(
-                        f"**{ALLERGY_OPTIONS.get(s['alergeno'], s['alergeno'])}:** "
-                        f"{s['substitucion']}"
-                    )
-                st.caption(
-                    "⚠️ La seguridad frente a contaminación cruzada depende de la "
-                    "lectura de etiquetas: ningún sistema puede garantizar «100 % seguro»."
-                )
-        st.caption(f"🩺 {plan_nutricional.get('derivacion', '')}")
-
-    with tab_entreno:
-        st.subheader(rutina["nombre"])
-        st.caption(f"**Días:** {rutina['dias']} · **Tipo:** {rutina['tipo']}")
-
-        # Rutina completa (incluye días de descanso) con 'grupo' (corrige KeyError de v2)
-        for dia in rutina.get("semana", []):
-            with st.expander(
-                f"📋 {dia['dia']} · {dia['grupo']}",
-                expanded=dia["dia"] in ("Lunes", "Martes"),
-            ):
-                if dia.get("descanso"):
-                    st.info(dia.get("nota", "Descanso planificado."))
-                    continue
-                df_ejercicios = pd.DataFrame(
-                    dia["ejercicios"], columns=["Ejercicio", "Series/Reps", "Músculo"]
-                )
-                st.dataframe(df_ejercicios, width="stretch", hide_index=True)
-                st.caption(
-                    f"⏱️ Descanso entre series: {dia.get('descanso_entre_series', '—')} · "
-                    f"⌛ Duración: {dia.get('duracion', '—')}"
-                )
-                if dia.get("nota"):
-                    st.markdown(f"💬 *{dia['nota']}*")
-
-        if rutina.get("cardio_extra"):
-            st.info(f"🏃 **Cardio adicional:** {rutina['cardio_extra']}")
-        if rutina.get("notas"):
-            st.warning(f"💡 **Nota del entrenador:** {rutina['notas']}")
+                        f'<div class="fx-day"><div class="hd"><span class="dayname">{day.get("dia", "")}</span>'
+                        f'{_chip("Descanso", "muted")}</div>'
+                        f'<p style="color:var(--fx-faint);font-size:.82rem;">Día de recuperación.</p></div>',
+                        unsafe_allow_html=True)
+                else:
+                    ejercicios = "".join(
+                        f'<div class="fx-ex"><span class="nm">{e[0]}</span>'
+                        f'<span class="dt">{e[1] if len(e) > 1 else ""}{" · " + e[2] if len(e) > 2 else ""}</span></div>'
+                        for e in day.get("ejercicios", []))
+                    st.markdown(
+                        f'<div class="fx-day"><div class="hd"><span class="dayname">{day.get("dia", "")}</span>'
+                        f'<span class="grp">{day.get("grupo", "")}</span></div>'
+                        f'{ejercicios}'
+                        f'<div class="fx-rest">Descanso entre series: '
+                        f'{day.get("descanso_entre_series", "—")}</div></div>',
+                        unsafe_allow_html=True)
 
         if rutina.get("lesiones_consideradas"):
-            st.caption("🩹 Restricciones aplicadas por lesión: "
-                       + ", ".join(rutina["lesiones_consideradas"]))
+            st.markdown(DS.alert_html(
+                "violet", "Restricciones por lesión consideradas",
+                ", ".join(rutina.get("lesiones_consideradas", []))), unsafe_allow_html=True)
         if rutina.get("alternativas_aplicadas"):
-            with st.expander("🔁 Ejercicios sustituidos por lesión"):
-                for nota in rutina["alternativas_aplicadas"]:
-                    st.markdown(f"- {nota}")
+            cuerpo = "<br>".join("• " + a for a in rutina.get("alternativas_aplicadas", []))
+            st.markdown(DS.alert_html("violet", "Ejercicios sustituidos por lesión",
+                                      cuerpo), unsafe_allow_html=True)
+        if rutina.get("cardio_extra"):
+            st.markdown(DS.alert_html("success", "Cardio complementario",
+                                      rutina.get("cardio_extra", "")), unsafe_allow_html=True)
 
-    with tab_expert:
-        st.subheader("Módulo de Explicación")
-        st.write(
-            "El sistema experto dedujo las siguientes recomendaciones a partir de "
-            "tus datos (encadenamiento hacia adelante). Se ordenan por severidad "
-            "y jerarquía."
-        )
+    # ── Explicación ────────────────────────────────────────────
+    with tab_exp:
+        _render_explicacion(perfil)
 
-        if perfil.conclusions:
-            orden = sorted(
-                perfil.conclusions,
-                key=lambda c: (SEVERITY_SORT.get(c.get("severity", "info"), 9),
-                               -(c.get("priority") or 0)),
-            )
-            for c in orden:
-                explicacion = next(
-                    (e["explanation"] for e in perfil.explanations if e["id"] == c["id"]),
-                    "",
-                )
-                sev = severity_style(c.get("severity", "info"))
-                cat_icon = CATEGORY_ICON.get(c.get("category", ""), "🩺")
-                badge = badge_html(c.get("severity", "info"), c.get("tier", ""))
-                refs = c.get("references") or []
-                refs_txt = " · ".join(refs) if refs else "—"
-
-                st.markdown(
-                    f'<div class="fx-card fx-card--{c.get("severity", "info")} fx-rise">'
-                    f'<div style="display:flex;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">'
-                    f'<b>{cat_icon} [{c.get("id", "")}] {c.get("description", "")}</b>'
-                    f'<span>{badge}</span></div>'
-                    f'<p style="margin:0.4rem 0 0.15rem;">👉 <b>Recomendación:</b> {c.get("conclusion", "")}</p>'
-                    f'<p style="color:#9AA8C0;font-size:0.9em;margin:0.15rem 0;">'
-                    f'<i>Razonamiento:</i> {explicacion}</p>'
-                    f'<p style="color:#4EC9B0;font-size:0.82em;margin:0.15rem 0;">'
-                    f'📚 {refs_txt}</p>'
-                    + (f'<p style="color:#B48CF2;font-size:0.85em;margin:0.15rem 0;">'
-                       f'↪️ <b>Alternativa:</b> {c.get("alternative", "")}</p>' if c.get("alternative") else "")
-                    + f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-            if perfil.suppressed:
-                with st.expander("🚫 Reglas suprimidas por conflicto / jerarquía"):
-                    for s in perfil.suppressed:
-                        st.markdown(
-                            f"- **[{s.get('id', '')}]** suprimida por"
-                            f" **[{s.get('suppressed_by', '')}]** — {s.get('reason', '')}"
-                        )
-        else:
-            st.info("No se activaron reglas específicas para este perfil.")
-
-        st.caption(
-            f"{summary_line({**motor.summary(), 'suppressed': len(motor.suppressed_rules)})} · "
-            f"{len(RULES)} reglas evaluadas"
-        )
-
-    with tab_hechos:
-        st.subheader("Base de Hechos (Representación Objeto-Atributo-Valor)")
-        st.write("Cada hecho expresa un atributo del objeto evaluado:")
-        st.json(perfil.facts)
-        st.caption(
-            "Los hechos son el snapshot de datos que el motor evaluó. La base de "
-            "hechos no guarda contraseñas ni datos externos."
-        )
+    st.markdown(_foot(), unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════
-#  PÁGINA: NUEVA CONSULTA
-# ══════════════════════════════════════════════
-if page == "Nueva Consulta":
-    _render_header(
-        "Evaluación Física Personalizada",
-        "Cuatro pasos. Cada paso se valida, y el motor explica cada recomendación.",
-    )
-
-    # ── Stepper ─────────────────────────────────────────────────────────
-    pasos = ["Datos personales", "Entrenamiento", "Salud y lesiones", "Nutrición"]
-    n_pasos = len(pasos)
-    step = st.session_state.fx_step
-    cols = st.columns(n_pasos, gap="small")
-    for i, nombre in enumerate(pasos, start=1):
-        cls = "fx-step active" if i == step else ("fx-step done" if i < step else "fx-step")
-        cols[i - 1].markdown(
-            f'<div class="{cls}"><span style="font-size:0.9em;">{i}</span> · {nombre}</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.session_state.fx_step = step  # asegurar tipo
-
-    errores: dict = {}
-    advertencias: list = []
-
-    # ── PASO 1 · Datos personales ───────────────────────────────────────
-    if step == 1:
-        c1, c2 = st.columns(2)
-        with c1:
-            nombre = st.text_input(
-                "Nombre *", value=_fx("name", "Usuario"),
-                help="Como aparecerá en las recomendaciones y el historial.",
-            )
-            _fx_set("name", nombre.strip() or "Usuario")
-
-            csex, cedad = st.columns(2)
-            with csex:
-                sexo = st.selectbox(
-                    "Sexo biológico *",
-                    list(SEX_OPTIONS.values()),
-                    index=list(SEX_OPTIONS.values()).index(_fx("sex", "masculino")),
-                )
-            with cedad:
-                edad = st.number_input(
-                    "Edad (años) *", min_value=10, max_value=110,
-                    value=_fx("age", 25),
-                    help="El sistema opera de 10 a 110 años.",
-                )
-            _fx_set("sex", sexo)
-            _fx_set("age", int(edad))
-        with c2:
-            cpeso, calt = st.columns(2)
-            with cpeso:
-                peso = st.number_input(
-                    "Peso (kg) *", min_value=20.0, max_value=400.0,
-                    value=float(_fx("weight", 70.0)), step=0.1,
-                )
-            with calt:
-                altura = st.number_input(
-                    "Estatura (cm) *", min_value=100.0, max_value=250.0,
-                    value=float(_fx("height", 170.0)), step=0.1,
-                )
-            _fx_set("weight", peso)
-            _fx_set("height", altura)
-
-            grasa = st.number_input(
-                "% de grasa corporal (opcional)",
-                min_value=0.0, max_value=70.0,
-                value=float(_fx("body_fat_pct", 0.0)), step=0.1,
-                help="Deja en 0 si no lo conoces.",
-            )
-            _fx_set("body_fat_pct", grasa)
-
-            edad_val = int(edad)
-            st.caption(
-                f"Franja de edad: "
-                f"{AGE_GROUP_LABELS.get(age_group_of(edad_val), '—')}"
-            )
-
-        st.button(
-            "Siguiente →", key="fx_next_1", width="stretch",
-            on_click=lambda: _go_next(1, n_pasos),
-        )
-
-    # ── PASO 2 · Entrenamiento ──────────────────────────────────────────
-    elif step == 2:
-        c1, c2 = st.columns(2)
-        with c1:
-            obj_vals = list(OBJECTIVE_LABELS.values())
-            objetivo = st.selectbox(
-                "Objetivo corporal *", obj_vals,
-                index=obj_vals.index(_fx("objective_label", obj_vals[0])),
-            )
-            _fx_set("objective", list(OBJECTIVE_LABELS.keys())[obj_vals.index(objetivo)])
-            _fx_set("objective_label", objetivo)
-
-            act_vals = list(ACTIVITY_LABELS.values())
-            actividad = st.selectbox(
-                "Nivel de actividad *", act_vals,
-                index=act_vals.index(_fx("activity_label", act_vals[2])),
-            )
-            _fx_set("activity_level", list(ACTIVITY_LABELS.keys())[act_vals.index(actividad)])
-            _fx_set("activity_label", actividad)
-        with c2:
-            exp_vals = list(EXPERIENCE_LABELS.values())
-            experiencia = st.selectbox(
-                "Experiencia *", exp_vals,
-                index=exp_vals.index(_fx("experience_label", exp_vals[0])),
-            )
-            _fx_set("experience", list(EXPERIENCE_LABELS.keys())[exp_vals.index(experiencia)])
-            _fx_set("experience_label", experiencia)
-
-            lugar_vals = list(TRAINING_PLACE_LABELS.values())
-            lugar = st.selectbox(
-                "Lugar de entrenamiento *", lugar_vals,
-                index=lugar_vals.index(_fx("place_label", lugar_vals[1])),
-            )
-            _fx_set("training_place", list(TRAINING_PLACE_LABELS.keys())[lugar_vals.index(lugar)])
-            _fx_set("place_label", lugar)
-
-        equipo = st.multiselect(
-            "Equipamiento disponible (si entrenas en casa)",
-            list(EQUIPMENT_OPTIONS.values()),
-            default=_defaults(_fx("equipment_labels", []), list(EQUIPMENT_OPTIONS.values())),
-            help="En gimnasio se asume máquinas, barras y mancuernas.",
-        )
-        _fx_set("equipment_labels", list(equipo))
-        _fx_set("equipment", [list(EQUIPMENT_OPTIONS.keys())[list(EQUIPMENT_OPTIONS.values()).index(e)]
-                              for e in equipo])
-
-        nav1, nav2 = st.columns(2)
-        nav1.button("← Anterior", key="fx_back_2", width="stretch",
-                    on_click=lambda: _go_back(2))
-        nav2.button("Siguiente →", key="fx_next_2", width="stretch",
-                    on_click=lambda: _go_next(2, n_pasos))
-
-    # ── PASO 3 · Salud y lesiones ───────────────────────────────────────
-    elif step == 3:
-        st.markdown('<p class="fx-section-title">Lesiones y limitaciones</p>',
-                    unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            inj_labels = list(INJURY_OPTIONS.values())
-            lesiones = st.multiselect(
-                "Zonas con molestia o lesión",
-                inj_labels,
-                default=_defaults(_fx("injuries_labels", []), inj_labels),
-            )
-            _fx_set("injuries_labels", list(lesiones))
-            _fx_set("injuries", [list(INJURY_OPTIONS.keys())[inj_labels.index(l)] for l in lesiones])
-
-            sev_vals = list(INJURY_SEVERITY_OPTIONS.values())
-            severidad = st.selectbox(
-                "Intensidad de las molestias *",
-                sev_vals,
-                index=sev_vals.index(
-                    INJURY_SEVERITY_OPTIONS.get(_fx("injury_severity", "ninguna"), sev_vals[0])
-                ),
-                help="«Dolor agudo actual» suspende la prescripción de ejercicio.",
-            )
-            _fx_set("injury_severity", list(INJURY_SEVERITY_OPTIONS.keys())[sev_vals.index(severidad)])
-        with c2:
-            balance = st.checkbox(
-                "Problemas de equilibrio / historial de caídas",
-                value=bool(_fx("balance_issues", False)),
-            )
-            _fx_set("balance_issues", balance)
-            st.caption("Esta información reorienta la rutina hacia prevención de caídas.")
-
-        st.markdown('<p class="fx-section-title">Señales de alarma</p>',
-                    unsafe_allow_html=True)
-        rf_labels = list(INJURY_RED_FLAGS.values())
-        red_flags = st.multiselect(
-            "¿Presentas alguno de estos síntomas?",
-            rf_labels,
-            default=_defaults(_fx("red_flags_labels", []), rf_labels),
-            help="Si marcas cualquiera, el sistema NO prescribirá ejercicio.",
-        )
-        _fx_set("red_flags_labels", list(red_flags))
-        _fx_set("red_flags", [list(INJURY_RED_FLAGS.keys())[rf_labels.index(r)] for r in red_flags])
-
-        if _fx("red_flags"):
-            st.error(
-                "Detectadas señales de alarma: la rutina de entrenamiento se "
-                "suspenderá y se recomendará evaluación médica antes de actividad física."
-            )
-
-        nav1, nav2 = st.columns(2)
-        nav1.button("← Anterior", key="fx_back_3", width="stretch",
-                    on_click=lambda: _go_back(3))
-        nav2.button("Siguiente →", key="fx_next_3", width="stretch",
-                    on_click=lambda: _go_next(3, n_pasos))
-
-    # ── PASO 4 · Nutrición ──────────────────────────────────────────────
-    elif step == 4:
-        c1, c2 = st.columns(2)
-        with c1:
-            dieta_labels = list(DIET_TYPES.values())
-            dieta = st.selectbox(
-                "Tipo de dieta *", dieta_labels,
-                index=dieta_labels.index(DIET_TYPES.get(_fx("diet_type", "omnivoro"))),
-            )
-            _fx_set("diet_type", list(DIET_TYPES.keys())[dieta_labels.index(dieta)])
-
-            al_labels = list(ALLERGY_OPTIONS.values())
-            alergias = st.multiselect(
-                "Alergias alimentarias",
-                al_labels,
-                default=_defaults(_fx("allergies_labels", []), al_labels),
-                help="Alergia = exclusión estricta del alimento y sus derivados.",
-            )
-            _fx_set("allergies_labels", list(alergias))
-            _fx_set("allergies", [list(ALLERGY_OPTIONS.keys())[al_labels.index(a)] for a in alergias])
-
-            if _fx("allergies"):
-                st.caption(
-                    "Las alergias excluyen el alimento completo. El sistema nunca "
-                    "afirma «100 % seguro»: la contaminación cruzada depende de las etiquetas."
-                )
-        with c2:
-            int_labels = list(INTOLERANCE_OPTIONS.values())
-            intolerancias = st.multiselect(
-                "Intolerancias digestivas",
-                int_labels,
-                default=_defaults(_fx("intolerances_labels", []), int_labels),
-            )
-            _fx_set("intolerances_labels", list(intolerancias))
-            _fx_set("intolerances", [list(INTOLERANCE_OPTIONS.keys())[int_labels.index(i)]
-                                     for i in intolerancias])
-
-            pref_labels = list(PREFERENCE_OPTIONS.values())
-            preferencias = st.multiselect(
-                "Preferencias de consumo",
-                pref_labels,
-                default=_defaults(_fx("preferences_labels", []), pref_labels),
-            )
-            _fx_set("preferences_labels", list(preferencias))
-            _fx_set("preferences", [list(PREFERENCE_OPTIONS.keys())[pref_labels.index(p)]
-                                    for p in preferencias])
-
-        with st.expander("Más opciones"):
-            comidas = st.selectbox(
-                "Comidas al día", [3, 4, 5], index=int(_fx("meal_frequency", 3)) - 3,
-            )
-            _fx_set("meal_frequency", int(comidas))
-            notas = st.text_area(
-                "Observaciones (opcional)", value=_fx("notes", ""),
-                max_chars=300, help="Hasta 300 caracteres.",
-            )
-            _fx_set("notes", notas)
-
-        if _fx("diet_type") == "vegano" and "soja" in _fx("allergies", []):
-            st.warning(
-                "Dieta vegana + alergia a la soja: la proteína se apoya en "
-                "legumbres, quinoa y frutos secos (según tolerancia). Considera supervisión nutricional."
-            )
-
-        nav1, nav2 = st.columns(2)
-        nav1.button("← Anterior", key="fx_back_4", width="stretch",
-                    on_click=lambda: _go_back(4))
-        generar = nav2.button(
-            "Generar recomendaciones expertas 🚀",
-            key="fx_generate", width="stretch",
-        )
-
-        if generar:
-            # ── Validación cruzada completa ─────────────────────────────
-            datos = {
-                "name": _fx("name", "Usuario"),
-                "age": _fx("age", 25),
-                "sex": _fx("sex", "masculino"),
-                "weight": _fx("weight", 70.0),
-                "height": _fx("height", 170.0),
-                "body_fat_pct": _fx("body_fat_pct", 0.0),
-                "objective": _fx("objective", "mantenimiento"),
-                "activity_level": _fx("activity_level", "moderado"),
-                "experience": _fx("experience", "principiante"),
-                "training_place": _fx("training_place", "gimnasio"),
-                "diet_type": _fx("diet_type", "omnivoro"),
-                "meal_frequency": _fx("meal_frequency", 3),
-                "injuries": _fx("injuries", []),
-                "equipment": _fx("equipment", []),
-                "allergies": _fx("allergies", []),
-                "intolerances": _fx("intolerances", []),
-                "preferences": _fx("preferences", []),
-                "red_flags": _fx("red_flags", []),
-                "injury_severity": _fx("injury_severity", "ninguna"),
-                "balance_issues": _fx("balance_issues", False),
-                "notes": _fx("notes", ""),
-            }
-            values, errores, advertencias = validate_evaluation(datos)
-
-            if errores:
-                st.session_state.fx_error = errores
-            else:
-                st.session_state.fx_error = None
-                perfil = UserProfile(**values)
-                _run_evaluation(perfil, advertencias)
-
-    # ── Resultados ──────────────────────────────────────────────────────
-    if st.session_state.fx_error:
-        st.markdown("### ⚠️ Antes de generar, revisa estos campos")
-        for campo, msg in st.session_state.fx_error.items():
-            st.error(f"**{campo.capitalize()}:** {msg}")
-
-    if st.session_state.fx_result:
-        _render_results(st.session_state.fx_result)
-
-    st.divider()
-    st.caption(
-        "⚠️ Este sistema es una herramienta informativa y académica. No "
-        "sustituye la evaluación ni el seguimiento de un profesional de la salud."
-    )
-
-# ──────────────────────────────────────────────
-#  PÁGINA: HISTORIAL
-# ──────────────────────────────────────────────
-elif page == "Historial de Consultas":
-    _render_header("Historial de Consultas", "Todas las evaluaciones registradas en la base de conocimiento.")
-
-    stats = db_stats()
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Consultas totales", stats.get("total_sesiones", stats.get("total_consultas", 0)))
-    m2.metric("Usuarios únicos", stats.get("usuarios_unicos", 0))
-    m3.metric("Reglas en la base", len(RULES))
-    m4.metric("Tiers de conocimiento", len(TIER_LABELS))
-
-    por_objetivo = stats.get("por_objetivo", {}) or {}
-    if por_objetivo:
-        st.subheader("Consultas por objetivo")
-        odf = pd.DataFrame(
-            {"Objetivo": [OBJECTIVE_LABELS.get(k, k) for k in por_objetivo],
-             "Consultas": list(por_objetivo.values())}
-        ).set_index("Objetivo")
-        st.bar_chart(odf, height=280)
-
-    users = list_users()
-    st.subheader("Consultas registradas")
-    if not users:
-        st.info("No hay consultas registradas todavía.")
-    else:
-        df = pd.DataFrame(users)
-        cols_show = [c for c in
-                     ["name", "age", "sex", "imc", "imc_category", "objective", "created_at"]
-                     if c in df.columns]
-        if "objective" in df.columns:
-            df["Objetivo"] = df["objective"].map(OBJECTIVE_LABELS).fillna(df["objective"])
-        df_show = df[cols_show].rename(columns={
-            "name": "Nombre", "age": "Edad", "sex": "Sexo", "imc": "IMC",
-            "imc_category": "Categoría", "objective": "Objetivo",
-            "created_at": "Fecha Consulta",
-        })
-        st.dataframe(df_show, width="stretch", hide_index=True)
-
-        csv_data = df_show.to_csv(index=False).encode("utf-8-sig")
+def _btn_pdf(perfil, plan, rutina) -> None:
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = tmp.name
+        export_pdf(perfil, plan, rutina, tmp_path)
+        with open(tmp_path, "rb") as fh:
+            data = fh.read()
+        os.unlink(tmp_path)
         st.download_button(
-            "⬇️ Descargar CSV", data=csv_data,
-            file_name="fitexpert_historial.csv", mime="text/csv",
-        )
+            "Descargar PDF",
+            data=data,
+            file_name=f"Plan_FitExpert_{perfil.name.replace(' ', '_')}.pdf",
+            mime="application/pdf",
+            key="pl_pdf", use_container_width=True)
+    except Exception as exc:  # nunca romper la página por un PDF
+        st.caption(f"No se pudo generar el PDF: {exc}")
 
-    st.divider()
-    st.caption(
-        "Se registran datos agregados sin exponer información de otros usuarios. "
-        "Este historial pertenece a este prototipo local de demostración."
-    )
 
-# ──────────────────────────────────────────────
-#  PÁGINA: ACERCA DEL SISTEMA
-# ──────────────────────────────────────────────
-else:
-    _render_header("Acerca del Sistema Experto", "Arquitectura, reglas y límites del sistema.")
+# ──────────────────────────────────────────────────────────────
+#  Página: Historial
+# ──────────────────────────────────────────────────────────────
 
-    c1, c2 = st.columns([3, 2])
+def _page_historial(user: dict) -> None:
+    _top("historial", "Historial",
+         "Tus evaluaciones guardadas. Selecciona una para ver el detalle.")
+    history = get_user_history(user["user_id"])
+
+    if not history:
+        _empty("historial", "Aún no hay evaluaciones",
+               "Cada evaluación que generes quedará guardada aquí.",
+               "Crear mi primera evaluación", "nueva")
+        st.markdown(_foot(), unsafe_allow_html=True)
+        return
+
+    opciones = [f'{_fmt_fecha(h.get("saved_at", ""))} — '
+                f'Peso {h.get("weight", 0):.1f} kg · '
+                f'IMC {h.get("imc", 0):.1f}   ({OBJECTIVE_LABELS.get(h.get("objective", ""), "—")})'
+                for h in history]
+    sel = st.selectbox("Sesión para ver en detalle", range(len(history)),
+                       format_func=lambda i: opciones[i],
+                       key="fx_hist_sel")
+
+    entry = history[sel]
+    m_imc = _metric("salud", "IMC", f"{entry.get('imc', 0):.1f}",
+                    entry.get("imc_category", ""), _imc_color(entry.get("imc", 0)))
+    m_tmb = _metric("cronometro", "TMB", f"{entry.get('tmb', 0):.0f}",
+                    "kcal reposo", DS.ACCENT)
+    m_kcal = _metric("objetivo", "Meta diaria", f"{entry.get('target_calories', 0):.0f}",
+                     "kcal", DS.GOLD)
+    m_age = _metric("perfil", "Edad", f"{entry.get('age', 0)}", "años", DS.TEXT_MUTED)
+    c1, c2 = st.columns([1.5, 1])
     with c1:
         st.markdown(
-            f"""
-FitExpert es un **Sistema Experto Basado en Reglas** para nutrición y
-acondicionamiento físico. Conserva la esencia clásica de los sistemas expertos:
-
-*   ⚙️ **Base de conocimiento:** **{len(RULES)} reglas** lógicas IF/THEN organizadas en
-    **{len(TIER_LABELS)} jerarquías**, desde **Seguridad** hasta **Seguimiento**.
-*   🔁 **Motor de inferencia:** **Encadenamiento hacia adelante** (*forward chaining*)
-    que evalúa el perfil contra las reglas y resuelve conflictos por jerarquía.
-*   🧩 **Representación del conocimiento:** paradigma **Objeto-Atributo-Valor (O-A-V)**.
-*   💡 **Módulo de explicación:** cada recomendación expone su razonamiento,
-    severidad, referencias reales y alternativa.
-*   🛡️ **Seguridad:** jerarquía SEGURIDAD > CONTRAINDICACIONES > EDAD > condición
-    física > objetivo > preferencias; las señales de alarma suspenden la prescripción.
-"""
-        )
-
-        # Jerarquía explicada
-        st.markdown("#### Jerarquía de reglas")
-        for tier, label in TIER_LABELS.items():
-            ts = tier_style(tier)
-            n = sum(1 for r in RULES if r.tier == tier)
-            st.markdown(
-                f'<div class="fx-card fx-card--info">'
-                f'<b style="color:{ts["color"]}">{ts["icon"]} {label}</b> '
-                f'<span style="color:#9AA8C0;">· {n} reglas</span></div>',
-                unsafe_allow_html=True,
-            )
+            f'<div class="fx-card fx-card--accent"><div class="fx-h2">Métricas guardadas</div>'
+            f'<div class="fx-band">{m_imc}{m_tmb}{m_kcal}{m_age}</div>'
+            f'<p class="fx-small">Confirmado: {"femenino" if entry.get("sex") == "femenino" else "masculino"} · '
+            f'Dieta {DIET_TYPES.get(entry.get("diet_type", ""), entry.get("diet_type", "—"))} · '
+            f'{entry.get("meal_frequency", 3)} comidas/día</p></div>',
+            unsafe_allow_html=True)
 
     with c2:
-        st.markdown("#### Modo de evaluación")
-        st.code(
-            "IF condición(perfil) THEN\n"
-            "    conclusión = regla\n"
-            "    explicación = justificación\n"
-            "    severidad = crítica|alta|media|baja\n"
-            "    referencias = [WHO|CDC|ACSM|AAP ...]",
-            language=None,
-        )
-        st.markdown("#### Fuentes citadas")
+        bf_txt = ("—" if not entry.get("body_fat_pct")
+                  else f"{entry.get('body_fat_pct', 0):.1f}%")
         st.markdown(
-            "Las reglas referencian únicamente fuentes reales: **OMS (WHO)**, "
-            "**CDC**, **AAP (Academia Americana de Pediatría)** y **ACSM** "
-            "(American College of Sports Medicine), según el dominio."
-        )
-        st.markdown("#### Consideraciones")
-        st.warning(
-            "Software académico y demostrativo. Las recomendaciones no sustituyen "
-            "el consejo, diagnóstico o tratamiento de un profesional de la salud certificado."
-        )
+            f'<div class="fx-card"><div class="fx-h2">Resumen de la evaluación</div>'
+            f'<p>Peso {entry.get("weight", 0):.1f} kg · Estatura {entry.get("height", 0):.0f} cm · '
+            f'Grasa {bf_txt}</p>'
+            f'<p>Lesiones: {", ".join(INJURY_OPTIONS.get(x, x) for x in entry.get("injuries", [])) or "Ninguna"}</p>'
+            f'<p>Alergias: {", ".join(ALLERGY_OPTIONS.get(x, x) for x in entry.get("allergies", [])) or "Ninguna"}</p>'
+            f'</div>', unsafe_allow_html=True)
 
-    st.divider()
-    st.caption(
-        "Desarrollado en Python 🐍 · Motor: encadenamiento hacia adelante · Interfaz web: Streamlit · "
-        f"Reglas activas: {len(RULES)}"
+    if st.button("Usar estos datos como base para una nueva evaluación",
+                 key="hs_reuse", use_container_width=True):
+        _prefill_from(entry, user)
+        st.session_state.fx_page = "nueva"
+        st.rerun()
+
+    concl = entry.get("conclusions") or []
+    if concl:
+        st.markdown('<div class="fx-h2" style="margin-top:.8rem;">Conclusiones del motor</div>',
+                    unsafe_allow_html=True)
+        for c in concl[:5]:
+            rid = c.get("id", "")
+            exp = next((e.get("explanation", "") for e in (entry.get("explanations") or [])
+                        if e.get("id") == rid), "")
+            color = _sev_color(c.get("severity", "info"))
+            st.markdown(
+                f'<div class="fx-rule"><span class="bar" style="background:{color};"></span>'
+                f'<div><div class="rid">{rid}</div>'
+                f'<div class="concl">{c.get("conclusion", "")}</div>'
+                f'<div class="exp">{exp}</div></div></div>',
+                unsafe_allow_html=True)
+
+    st.markdown(_foot(), unsafe_allow_html=True)
+
+
+def _prefill_from(entry: dict, user: dict) -> None:
+    """Vuelca una sesión guardada en el borrador del asistente (fx_ev)."""
+    fx = st.session_state.setdefault("fx_ev", {})
+    fx["ev_name"] = user["username"]
+    fx["ev_age"] = entry.get("age", 25)
+    fx["ev_sex"] = "Femenino" if entry.get("sex") == "femenino" else "Masculino"
+    fx["ev_weight"] = float(entry.get("weight", 70))
+    fx["ev_height"] = float(entry.get("height", 172))
+    fx["ev_bodyfat"] = float(entry.get("body_fat_pct", 0) or 0.0)
+    fx["ev_objective"] = OBJECTIVE_LABELS.get(entry.get("objective", "mantenimiento"),
+                                              list(OBJECTIVE_LABELS.values())[4])
+    fx["ev_activity"] = ACTIVITY_LABELS.get(entry.get("activity_level", "ligero"),
+                                            list(ACTIVITY_LABELS.values())[1])
+    fx["ev_exp"] = EXPERIENCE_LABELS.get(entry.get("experience", "principiante"),
+                                         list(EXPERIENCE_LABELS.values())[0])
+    fx["ev_place"] = TRAINING_PLACE_LABELS.get(entry.get("training_place", "casa"))
+    fx["ev_freq"] = f"{entry.get('meal_frequency', 3)} comidas"
+    fx["ev_equip"] = [EQUIPMENT_OPTIONS.get(k) for k in (entry.get("equipment", []) or [])
+                      if k in EQUIPMENT_OPTIONS]
+    fx["ev_inj"] = [INJURY_OPTIONS.get(x, x) for x in entry.get("injuries", [])]
+    fx["ev_sev"] = INJURY_SEVERITY_OPTIONS.get(entry.get("injury_severity", "ninguna"),
+                                               list(INJURY_SEVERITY_OPTIONS.values())[0])
+    fx["ev_bal"] = bool(entry.get("balance_issues", False))
+    fx["ev_rf"] = [INJURY_RED_FLAGS.get(x, x) for x in entry.get("red_flags", [])]
+    fx["ev_notes"] = entry.get("notes", "")
+    fx["ev_diet"] = DIET_TYPES.get(entry.get("diet_type", "omnivoro"),
+                                   list(DIET_TYPES.values())[0])
+    fx["ev_alg"] = [ALLERGY_OPTIONS.get(x, x) for x in entry.get("allergies", [])]
+    fx["ev_int"] = [INTOLERANCE_OPTIONS.get(x, x) for x in entry.get("intolerances", [])]
+    fx["ev_pref"] = [PREFERENCE_OPTIONS.get(x, x) for x in entry.get("preferences", [])]
+    st.session_state.fx_step = 1
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Evolución
+# ──────────────────────────────────────────────────────────────
+
+def _page_progreso(user: dict) -> None:
+    _top("progreso", "Evolución",
+         "Sigue tu progreso entre evaluaciones: peso, calorías y sesiones.")
+    history = get_user_history(user["user_id"])
+    progress = get_progress_summary(user["user_id"])
+
+    if len(history) < 2:
+        _empty("progreso", "Necesitas más datos",
+               "Con al menos 2 evaluaciones podrás visualizar tu evolución.")
+        st.markdown(_foot(), unsafe_allow_html=True)
+        return
+
+    band = "".join([
+        _metric("historial", "Evaluaciones", str(progress.get("sesiones", 0)),
+                "registradas", DS.ACCENT),
+        _metric("progreso", "Δ Peso",
+                f"{'+' if progress.get('delta_peso_kg', 0) > 0 else ''}"
+                f"{progress.get('delta_peso_kg', 0):.1f} kg",
+                "desde la primera", DS.SUCCESS if progress.get("delta_peso_kg", 0) <= 0 else DS.DANGER),
+        _metric("calendario", "Periodo",
+                f"{len(history)} sesiones",
+                f"{_fmt_fecha(progress.get('primera_sesion', ''))} → {_fmt_fecha(progress.get('ultima_sesion', ''))}",
+                DS.PRIMARY),
+    ])
+    st.markdown(f'<div class="fx-band">{band}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="fx-h2">Evolución del peso</div>', unsafe_allow_html=True)
+    st.pyplot(_fig_evolucion(history), clear_figure=True)
+    st.markdown('<div class="fx-h2" style="margin-top:1.1rem;">Ajuste calórico</div>',
+                unsafe_allow_html=True)
+    st.pyplot(_fig_calorias(history), clear_figure=True)
+    st.markdown(_foot(), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Lógica del experto
+# ──────────────────────────────────────────────────────────────
+
+def _render_explicacion(perfil) -> None:
+    conclusions = list(perfil.conclusions or [])
+    suppressed = list(perfil.suppressed or [])
+    errors = list(perfil.engine_errors or [])
+
+    st.markdown(
+        f'<div class="fx-card fx-card--accent"><div class="fx-h2">Transparencia del motor</div>'
+        f'<p>{len(conclusions)} reglas activadas · {len(suppressed)} suprimidas por jerarquía · '
+        f'{len(errors)} errores internos · sobre {len(RULES)} reglas evaluadas.</p>'
+        f'<p class="fx-small">Cada conclusión explica qué dato tuyo activó la regla, '
+        f'con qué referencia y qué alternativa consideró el sistema.</p></div>',
+        unsafe_allow_html=True)
+
+    _sev_order = {"critica": 0, "alta": 1, "media": 2, "baja": 3, "info": 4}
+
+    if not conclusions and not suppressed:
+        _empty("explicacion", "Sin conclusiones específicas",
+               "Ninguna regla de la base de conocimiento se activó para este perfil, "
+               "más allá de los cálculos generales.", None)
+
+    def _rule_card(c: dict) -> str:
+        rid = c.get("id", "")
+        sev = c.get("severity", "info")
+        sev_style = DS.severity_style(sev)
+        tier = c.get("tier", "")
+        tier_label = TIER_LABELS.get(tier, tier)
+        exp = next((e.get("explanation", "") for e in (perfil.explanations or [])
+                    if e.get("id") == rid), "")
+        refs = c.get("references")
+        alternative = c.get("alternative")
+        chips = (DS.badge_html(sev, tier) + "&nbsp;")
+        alt_html = (f'<div class="alt">Alternativa considerada: {alternative}</div>'
+                    if alternative else "")
+        refs_html = (f'<div class="refs">{refs}</div>' if refs else "")
+        return (f'<div class="fx-rule"><span class="bar" style="background:{sev_style["color"]};"></span>'
+                f'<div style="flex:1;min-width:0;">'
+                f'<div class="rid">{rid} · {tier_label}</div>'
+                f'{chips}'
+                f'<div class="concl">{c.get("conclusion", "")}</div>'
+                f'<div class="exp">{exp}</div>'
+                f'{refs_html}{alt_html}</div></div>')
+
+    for c in sorted(conclusions, key=lambda c: _sev_order.get(c.get("severity", "info"), 9)):
+        st.markdown(_rule_card(c), unsafe_allow_html=True)
+
+    if suppressed:
+        st.markdown('<div class="fx-h2" style="margin-top:1rem;">Reglas suprimidas por jerarquía</div>',
+                    unsafe_allow_html=True)
+        for s in suppressed:
+            st.markdown(
+                f'<div class="fx-rule"><span class="bar" style="background:{DS.TEXT_FAINT};"></span>'
+                f'<div><div class="rid">[{s.get("id", "")}] suprimida por [{s.get("suppressed_by", "")}]</div>'
+                f'<div class="exp">{s.get("reason", "")}</div></div></div>',
+                unsafe_allow_html=True)
+
+    if errors:
+        st.markdown('<div class="fx-h2" style="margin-top:1rem;">Errores internos de evaluación</div>',
+                    unsafe_allow_html=True)
+        for e in errors:
+            st.markdown(DS.alert_html("danger", f"Regla [{e.get('id', '')}]",
+                                      str(e.get("error", ""))), unsafe_allow_html=True)
+
+
+def _page_explicacion(user: dict) -> None:
+    _top("explicacion", "Lógica del experto",
+         "Recorre el razonamiento del motor: qué regla, qué dato tuyo la activó y con qué fuente.")
+    res = st.session_state.fx_results or _load_latest_results(user["user_id"])
+    if not res:
+        _empty("explicacion", "Sin plan activo",
+               "Genera una evaluación para poder explicarte sus decisiones.",
+               "Crear evaluación", "nueva")
+    else:
+        _render_explicacion(res["perfil"])
+    st.markdown(_foot(), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Perfil
+# ──────────────────────────────────────────────────────────────
+
+def _page_perfil(user: dict) -> None:
+    _top("perfil", "Perfil", "Datos de tu cuenta, tu progreso y seguridad.")
+    history = get_user_history(user["user_id"])
+    progress = get_progress_summary(user["user_id"])
+
+    band = "".join([
+        _metric("historial", "Evaluaciones", str(progress.get("sesiones", 0)),
+                "guardadas", DS.ACCENT),
+        _metric("progreso", "Δ Peso",
+                f"{'+' if progress.get('delta_peso_kg', 0) > 0 else ''}"
+                f"{progress.get('delta_peso_kg', 0):.1f} kg",
+                "desde la primera", DS.PRIMARY),
+        _metric("inicio", "Plan activo",
+                "Sí" if (st.session_state.fx_results
+                         or _load_latest_results(user["user_id"])) else "No",
+                "evaluación actual", DS.GOLD),
+    ])
+    st.markdown(f'<div class="fx-band">{band}</div>', unsafe_allow_html=True)
+
+    c_acc, c_pwd = st.columns([1, 1])
+    with c_acc:
+        st.markdown(
+            f'<div class="fx-card"><div class="fx-h2">Cuenta</div>'
+            f'<div style="display:flex;gap:.6rem;align-items:center;margin-top:.4rem;">'
+            f'<span class="fx-avatar" style="width:44px;height:44px;font-size:1.1rem;">'
+            f'{user["username"][:1].upper()}</span>'
+            f'<div><div style="font-weight:700;">{user["username"]}</div>'
+            f'<div class="fx-small">ID {user["user_id"][:8]}…</div></div></div>'
+            f'<p class="fx-small" style="margin-top:.6rem;">Sesión local del navegador. '
+            f'Los datos viven en este equipo con autenticación Argon2id.</p></div>',
+            unsafe_allow_html=True)
+
+    with c_pwd:
+        st.markdown('<div class="fx-card"><div class="fx-h2">Cambiar contraseña</div>',
+                    unsafe_allow_html=True)
+        with st.form("pf_cambio"):
+            old = st.text_input("Contraseña actual", type="password", key="pf_old")
+            nw = st.text_input("Nueva contraseña", type="password", key="pf_new",
+                               help="Mínimo 8 caracteres")
+            nw2 = st.text_input("Confirmar nueva contraseña", type="password", key="pf_new2")
+            submitted = st.form_submit_button("Actualizar contraseña",
+                                              use_container_width=True, type="primary")
+            if submitted:
+                if nw != nw2:
+                    st.error("Las nuevas contraseñas no coinciden.")
+                else:
+                    res = change_password(user["username"], old, nw)
+                    if res.get("ok"):
+                        st.success("Contraseña actualizada.")
+                    else:
+                        st.error(res.get("error", "No se pudo actualizar."))
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown(_foot(), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Página: Acerca
+# ──────────────────────────────────────────────────────────────
+
+def _page_acerca(user: dict) -> None:
+    _top("libro", "Acerca de FitExpert",
+         "El sistema experto: conocimiento, jerarquía de seguridad y alcance.")
+
+    # Conteo de reglas por tier
+    por_tier: dict = {}
+    for r in RULES:
+        tier = getattr(r, "tier", "OBJETIVO") or "OBJETIVO"
+        por_tier[tier] = por_tier.get(tier, 0) + 1
+
+    tiers_html = "".join(
+        f'<div class="fx-macro"><div class="row"><span>'
+        f'{DS.TIER_STYLE.get(t, {}).get("icon", "•")}&nbsp; '
+        f'{TIER_LABELS.get(t, t)}</span><b>{n} reglas</b></div>'
+        f'<div class="fx-track"><div class="fx-fill" style="width:{n / len(RULES) * 100:.0f}%;'
+        f'background:{DS.TIER_STYLE.get(t, {}).get("color", DS.TEXT_MUTED)};"></div></div></div>'
+        for t, n in sorted(por_tier.items(),
+                           key=lambda kv: DS.TIER_STYLE.get(kv[0], {}).get("color", "")))
+
+    stats = db_stats()
+    st.markdown(
+        f'<div class="fx-card fx-card--accent"><div class="fx-h2">Motor de conocimiento</div>'
+        f'<p>Encadenamiento hacia adelante sobre una base de <b>{len(RULES)} reglas</b> '
+        f'IF/THEN con 7 jerarquías de severidad. La jerarquía decide qué hacer cuando '
+        f'dos reglas compiten: seguridad y contraindicaciones mandan sobre el resto.</p>'
+        f'{tiers_html}</div>', unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            f'<div class="fx-card"><div class="fx-h2">Actividad del sistema</div>'
+            f'<p>{stats.get("total_sesiones", 0)} evaluaciones · '
+            f'{stats.get("usuarios_unicos", 0)} usuarios · '
+            f'{len(RULES)} reglas en la base de conocimiento.</p></div>',
+            unsafe_allow_html=True)
+    with c2:
+        st.markdown(
+            f'<div class="fx-card"><div class="fx-h2">Fuentes de referencia</div>'
+            f'<p>{" · ".join(_SOURCES)}</p>'
+            f'<p class="fx-small">El contenido es orientativo y educativo; no sustituye '
+            f'al consejo, diagnóstico ni tratamiento de un profesional de la salud.</p></div>',
+            unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div class="fx-card fx-card--dim"><div class="fx-h2">Límites del sistema</div>'
+        f'<p class="fx-small">Edad 10–100 · Peso 30–300 kg · Estatura 100–250 cm · '
+        f'Grasa 3–70%. Fuera de rango, el formulario pide revisión antes de calcular. '
+        f'Ante señales de alarma, el sistema suspende la prescripción de ejercicio.</p></div>',
+        unsafe_allow_html=True)
+    st.markdown(_foot(), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Punto de entrada
+# ──────────────────────────────────────────────────────────────
+
+def main() -> None:
+    st.set_page_config(
+        page_title=f"{_APP_NAME} — Nutrición y entrenamiento que se explican",
+        page_icon=_ICON_FAVICON,
+        layout="wide",
+        initial_sidebar_state="expanded",
     )
+    _defaults()
+
+    user = st.session_state.fx_user
+    if not user:
+        _render_auth()
+        return
+
+    _css()
+    _sidebar(user)
+
+    page = st.session_state.fx_page
+    if page == "nueva":
+        _page_nueva(user)
+    elif page == "plan":
+        _page_plan(user)
+    elif page == "historial":
+        _page_historial(user)
+    elif page == "progreso":
+        _page_progreso(user)
+    elif page == "explicacion":
+        _page_explicacion(user)
+    elif page == "perfil":
+        _page_perfil(user)
+    elif page == "acerca":
+        _page_acerca(user)
+    else:
+        st.session_state.fx_page = "inicio"
+        _page_inicio(user)
 
 
+main()

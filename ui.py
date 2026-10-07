@@ -71,12 +71,12 @@ def show_banner() -> None:
     console.clear()
     banner = Text(justify="center")
     banner.append("\n")
-    banner.append("  ███████╗██╗████████╗███████╗██╗  ██╗██████╗ ███████╗██████╗ ████████╗\n", style="bold #E94E4E")
-    banner.append("  ██╔════╝██║╚══██╔══╝██╔════╝╚██╗██╔╝██╔══██╗██╔════╝██╔══██╗╚══██╔══╝\n", style="bold #E94E4E")
-    banner.append("  █████╗  ██║   ██║   █████╗   ╚███╔╝ ██████╔╝█████╗  ██████╔╝   ██║\n", style="bold #E94E4E")
-    banner.append("  ██╔══╝  ██║   ██║   ██╔══╝   ██╔██╗ ██╔══██╗██╔══╝  ██╔══██╗   ██║\n", style="bold #E94E4E")
-    banner.append("  ██║     ██║   ██║   ███████╗██╔╝ ██╗██║  ██║███████╗██║  ██║   ██║\n", style="bold #E94E4E")
-    banner.append("  ╚═╝     ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝\n", style="bold #E94E4E")
+    banner.append("  ███████╗██╗████████╗███████╗██╗  ██╗██████╗ ███████╗██████╗ ████████╗\n", style="bold #2DD4BF")
+    banner.append("  ██╔════╝██║╚══██╔══╝██╔════╝╚██╗██╔╝██╔══██╗██╔════╝██╔══██╗╚══██╔══╝\n", style="bold #2DD4BF")
+    banner.append("  █████╗  ██║   ██║   █████╗   ╚███╔╝ ██████╔╝█████╗  ██████╔╝   ██║\n", style="bold #2DD4BF")
+    banner.append("  ██╔══╝  ██║   ██║   ██╔══╝   ██╔██╗ ██╔══██╗██╔══╝  ██╔══██╗   ██║\n", style="bold #2DD4BF")
+    banner.append("  ██║     ██║   ██║   ███████╗██╔╝ ██╗██║  ██║███████╗██║  ██║   ██║\n", style="bold #2DD4BF")
+    banner.append("  ╚═╝     ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝\n", style="bold #2DD4BF")
 
     console.print(banner)
     console.print(
@@ -86,7 +86,7 @@ def show_banner() -> None:
                 f"[dim]Motor basado en reglas · {len(RULES)} reglas IF/THEN · Encadenamiento hacia adelante[/dim]\n"
                 "[dim cyan]Inteligencia Artificial · Sistemas Expertos[/dim cyan]"
             ),
-            border_style="#E94E4E",
+            border_style="#2DD4BF",
             padding=(1, 4),
         )
     )
@@ -476,7 +476,7 @@ def show_nutrition_plan(plan: dict) -> None:
             )
         )
     if plan.get("derivacion"):
-        console.print(f"  [dim]🩺 {plan['derivacion']}[/dim]")
+        console.print(f"  [dim]→ {plan['derivacion']}[/dim]")
 
 
 # ══════════════════════════════════════════════
@@ -586,7 +586,7 @@ def show_conclusions(profile: UserProfile) -> None:
     )
 
     for c in orden:
-        icon = CATEGORY_ICON.get(c.get("category", ""), "🩺")
+        icon = CATEGORY_ICON.get(c.get("category", ""), "•")
         sev = SEVERITY_STYLE.get(c.get("severity", "info"), SEVERITY_STYLE["info"])
         tier_label = c.get("tier_label", c.get("tier", ""))
         bad = (
@@ -803,7 +803,7 @@ def show_about() -> None:
     console.print(
         Panel(
             Text.from_markup(
-                "[bold #E94E4E]FitExpert — Sistema Experto en Nutrición y Acondicionamiento Físico[/bold #E94E4E]\n\n"
+                "[bold #2DD4BF]FitExpert — Sistema Experto en Nutrición y Acondicionamiento Físico[/bold #2DD4BF]\n\n"
                 "[bold white]Arquitectura:[/bold white]\n"
                 "  [cyan]•[/cyan] Base de Conocimiento  — "
                 f"[bold]{len(RULES)} reglas IF/THEN[/bold] (knowledge_base.py)\n"
@@ -825,7 +825,7 @@ def show_about() -> None:
                 "  ante enfermedades crónicas, lesiones agudas o señales de alarma.\n\n"
                 "[dim]Desarrollado como proyecto académico — Sistemas Expertos[/dim]"
             ),
-            border_style="#E94E4E", padding=(1, 3),
+            border_style="#2DD4BF", padding=(1, 3),
         )
     )
 

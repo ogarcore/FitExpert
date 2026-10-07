@@ -1,0 +1,23 @@
+# FitExpert — Tema Streamlit (identidad teal/navy)
+# Evita los acentos rojizos por defecto de Streamlit en controles nativos
+# (tab activo, botones "primary", checkboxes, multiselect, anillos de foco).
+[theme]
+base = "dark"
+primaryColor = "#2DD4BF"
+backgroundColor = "#070B15"
+secondaryBackgroundColor = "#0E1526"
+textColor = "#E9F0FC"
+
+# La tipografía "Segoe UI Variable" se inyecta por CSS (!important) desde
+# design_system.py; el tema solo fija colores del framework.
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
+
+[client]
+# Nunca mostrar Tracebacks crudos a quien usa la app: los errores del dominio
+# se muestran de forma humana (st.error inline) desde la lógica de la app.
+showErrorDetails = false

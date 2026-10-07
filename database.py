@@ -71,11 +71,18 @@ def _save_db(data: dict) -> None:
 #  API pública
 # ──────────────────────────────────────────────
 
-def save_profile(profile: UserProfile) -> None:
-    """Guarda la sesión del usuario en la base de datos."""
+def save_profile(profile: UserProfile, extra: dict | None = None) -> None:
+    """Guarda la sesión del usuario en la base de datos.
+
+    `extra` permite persistir además del perfil los resultados calculados
+    (plan nutricional, rutina y advertencias) para que el plan activo siga
+    disponible tras un reinicio de sesión sin tener que regenerarse.
+    """
     db = _load_db()
     entry = profile.to_dict()
     entry["saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if extra:
+        entry.update(extra)
     db["sessions"].append(entry)
     _save_db(db)
 

@@ -2,7 +2,7 @@
 
 **Producto:** FitExpert — Sistema Experto en Nutrición y Acondicionamiento Físico
 **Alcance:** Auditoría técnica, funcional, visual, de seguridad, UX, validación y rendimiento, con implementación directa de todas las mejoras.
-**Estado:** ✔ Completado — 146 pruebas automatizadas en verde, 3 interfaces operativas, producto entregable.
+**Estado:** ✔ Completado — **154 pruebas automatizadas en verde**, 2 clientes completos de producto (escritorio prioritario + web) validados **E2E**, 3 interfaces operativas, producto entregable.
 **Fecha:** 2026-10-06
 
 ---
@@ -279,3 +279,56 @@ tests/
 
 **Nuevos módulos:** `validation.py`, `design_system.py`, `benchmarks.py`, `DOCUMENTACION_TECNICA.md`, docx-generators, `.gitignore`.
 **Módulos reescritos/fijados:** `auth.py`, `user_profile.py`, `calculations.py`, `knowledge_base.py`, `inference_engine.py`, `nutrition.py`, `training.py`, `database.py`, `pdf_exporter.py`, `gui.py`, `ui.py`, `main.py`, `app_desktop.pyw`.
+
+---
+
+## S. Addendum — Auditoría de producto Fase 2 y prueba E2E de ambos clientes
+
+**Objetivo:** convertir FitExpert en un producto *premium coherente*: escritorio CustomTkinter inmersivo (prioridad) + web Streamlit completa, bajo **una** identidad teal/navy (`design_system.py` v2), tipografía compartida y **triple iconografía sin emojis** (Fluent UI en escritorio, SVG Fluent/Jam en web, ASCII en consola).
+
+### S.1 Correcciones de producto aplicadas (web + núcleo)
+
+| # | Hallazgo en E2E | Corrección | Dónde |
+|---|---|---|---|
+| 1 | El **plan activo desaparecía tras relogin** (el plan se recalcula solo en la misma sesión) | `save_profile(profile, extra)` persiste `resultados` (plan, rutina, advertencias, timestamp) en la sesión y `_load_latest_results(user_id)` reconstruye el plan activo tras relogin; dashboard, plan, explicabilidad y métrica de perfil lo consumen | `database.py`, `gui.py` |
+| 2 | **`StreamlitAPIException` al reabrir el asistente**: el multiselect recibía claves canónicas (`'gluten'`) donde las opciones son etiquetas | `_ev_defs` mapea claves→etiquetas (`.get(x, x)`) en alergias/intolerancias/preferencias/lesiones/señales | `gui.py` |
+| 3 | **Toda la UI web usaba los acentos rojizos por defecto de Streamlit**: el botón activo del sidebar (nav `primary`), el subrayado del tab activo, checkboxes y multiselects renderizaban `#FF4B4B` | Nuevo **`.streamlit/config.toml`** con el tema teal/navy (`primaryColor #2DD4BF`, fondos `#070B15`/`#0E1526`, texto `#E9F0FC`, `showErrorDetails=false` para nunca exponer Tracebacks) | `.streamlit/config.toml` |
+| 4 | **Blindaje residual en el asistente**: un valor rejugado/clave legada en el estado del cliente podía volver a colar un default inválido | Helper `_defaults_in(raw, options)` filtra los defaults de los 6 multiselects contra las opciones válidas (doble vía de protección) | `gui.py` |
+| 5 | Tras logout, la web reabría en la pestaña "Entrar" | `_logout` resetea `fx_auth_mode="login"` | `gui.py` |
+
+### S.2 Auditoría visual (análisis PIL por regiones)
+
+Se automatizó un harness de captura + análisis top-colors/bbox (`fx_pix.py`, `fx_region.py`) sobre capturas reales de ambos clientes:
+
+- **Escritorio (1475×1000, 9 vistas):** paleta fiel a la identidad — navy `#070B15` (45–66 %), elevaciones `#0E1526`/`#1A2338`, acentos teal `#2DD4BF`, texto `#E9F0FC`; sin rojos ni blancos parásitos. El único bloque rojo oscuro (`#2A0E0E`) es el **aviso médico diseñado** de "no sustituye la consulta profesional" (página Acerca de), con borde CRITICAL intencional.
+- **Web (1140×843, login/wizard/dashboard/plan):** tras el `config.toml`, `rojo_critico = none` en todas las vistas (antes: 1,3 % de `#FF4B4B` por los controles nativos); teal presente 1,5–7,9 % (login incluye el panel brand). El "bloque gris" que aparecía en análisis previos era el **skeleton de carga** de Streamlit, no contenido.
+- **Diagnóstico del problema visual reportado:** el "rojo crítico" de las capturas iniciales era (a) el botón activo del sidebar con `type="primary"` → color por defecto de Streamlit, y (b) el subrayado del tab activo. Ambos eliminados con el tema.
+
+### S.3 Escenarios E2E ejecutados (ambos clientes, usuario aislado)
+
+| # | Escenario | Resultado |
+|---|---|---|
+| 1 | Login real (contraseña correcta / incorrecta) | ✔ autentica / rechaza con mensaje humano |
+| 2 | Registro real → auto-login → dashboard | ✔ (Argon2id, lockout heredado) |
+| 3 | Wizard guiado 5 pasos sembrado desde la última sesión (alergias como etiqueta) | ✔ sin `StreamlitAPIException`, seed correcto |
+| 4 | Generación de plan determinista (IMC/TMB/TDEE/macros 25/50/25 %, menú sin gluten, "caja Consideraciones de seguridad") | ✔ |
+| 5 | **Logout → reabre en "Entrar" → relogin → "Tienes un plan activo"** con advertencias y curva de evolución persistidas | ✔ (fix S.1-1) |
+| 6 | Historial → "usar como base" → asistente en paso 1 | ✔ |
+| 7 | Evolución (2 sesiones: gráfico de peso y ajuste calórico) | ✔ renderiza y traza |
+| 8 | Lógica del experto: `13 reglas activadas · 0 suprimidas · 0 errores · sobre 69` + tarjetas SEG-ALG-01 / NUT-12 con referencia | ✔ |
+| 9 | Perfil: PLAN ACTIVO: Sí, cambio de contraseña presente | ✔ |
+| 10 | Escritorio: smoke 16/16 (registro, login, 8 páginas, error inline, generación, post-plan, historial-base, logout/relogin) + capturas de las 9 vistas | ✔ `ALL_DESKTOP_SMOKE_PASS` |
+
+### S.4 Cobertura de pruebas
+
+- Suite completa actual: **154 pruebas en verde** (el informe original documentaba 146; se añadió `tests/test_design_system.py` con **8 pruebas** de identidad: paleta, tipografía, iconos Fluent sin emojis y chips con doble codificación).
+- E2E web con usuario real de la BD: se ejecutó con `webe2e_*` y con `e2e_final` (registro desde cero → plan → logout → relogin).
+- **Limpieza de datos de prueba:** eliminados de la BD los usuarios `apptest1`, `smoketest_331503`, `smoketest_331537`, `webe2e_574616`, `smoketest_334800` y `desktop_cap` (respaldados en `backups_pruebas_fase2/`), así como `local_session.json`. Proceso no destructivo: los usuarios reales (`ogarcia`, `papitomyrrei`, `axelittz`, `LolaLolita`, `HelloClass`, `papi`) y sus sesiones quedan intactos.
+
+### S.5 Verificación final (fase 2)
+
+```bash
+python -m pytest -q                    # 154 passed
+pythonw app_desktop.pyw                # escritorio (prioridad)
+python -m streamlit run gui.py --server.headless true --server.port 8501   # web
+```

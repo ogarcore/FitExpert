@@ -512,11 +512,17 @@ database.py (usuarios.json)
 cd c:\Users\garci\Desktop\proyectos_variados\FitExpert
 
 # 2. Instalar dependencias
-python -m pip install rich customtkinter matplotlib reportlab pandas streamlit
+python -m pip install rich customtkinter matplotlib reportlab pandas streamlit argon2-cffi
 
 # 3. (Recomendado) Restaurar pdf_exporter.py desde Git si fue eliminado localmente:
 git checkout HEAD -- pdf_exporter.py
 ```
+
+> **Tema web:** `.streamlit/config.toml` fija la identidad teal/navy del framework Streamlit
+> (evita los acentos rojizos por defecto en tabs, botones "primary", checkboxes y
+> multiselects) y activa `showErrorDetails = false` para que ningún Traceback llegue
+> al usuario final. `argon2-cffi` es opcional pero recomendado: sin él la librería
+> usa PBKDF2-HMAC-SHA256 (600 000 iteraciones) como fallback OWASP.
 
 ### Ejecución de Interfaces
 * **Escritorio Nativo (CustomTkinter):**
@@ -700,3 +706,50 @@ FitExpert demuestra con éxito la vigencia y potencia del paradigma de **Intelig
 | **Seguridad de Cuentas** | Identificadores únicos UUIDv4 y procesamiento de contraseñas con Argon2id con sal (fallback PBKDF2-HMAC-SHA256; migración automática de hashes legacy SHA-256). |
 | **Calidad de Software** | Suite de análisis estático integrada bajo la norma ISO/IEC 25010 mediante Radon (complejidad/mantenibilidad), Flake8 (estilo) y Bandit (SAST). |
 | **Requisitos de Ejecución** | Python 3.10+ y bibliotecas `rich`, `customtkinter`, `matplotlib`, `reportlab`, `pandas`, `streamlit`. Cero dependencias de servidores externos de pago. |
+
+---
+
+# 25. Addendum — Fase 2: Producto Premium de Doble Cliente (Escritorio + Web)
+
+## 25.1 Objetivo
+
+Elevar FitExpert de proyecto demostrativo a **producto premium coherente**: un cliente de
+escritorio inmersivo (CustomTkinter, prioridad) y un cliente web completo (Streamlit) que
+comparten **la misma lógica experta, la misma autenticación y una única identidad visual**
+teal/navy (`design_system.py` v2). Todo sin emojis como iconografía (excepción solo en
+contenido textual).
+
+## 25.2 Novedades de la fase 2
+
+- **`design_system.py` v2:** paleta teal `#2DD4BF` / navy `#070B15` con elevaciones y semántica
+  (`DANGER`, `CRITICAL`, `SUCCESS`, `WARNING`, `VIOLET` para explicabilidad), tipografía
+  "Segoe UI Variable" compartida, y dos repertorios de iconos: **FLUENT** (escritorio) y
+  **FLUENT_MDL2** (web, inyectados como SVG — jamás emojis).
+- **`.streamlit/config.toml`:** tema del framework alineado con la identidad
+  (`primaryColor #2DD4BF`, `backgroundColor #070B15`, `secondaryBackgroundColor #0E1526`,
+  `textColor #E9F0FC`, `headless`, `gatherUsageStats=false`, `showErrorDetails=false`).
+  Elimina el tema rojo por defecto de Streamlit en controles nativos (nav activa, tab,
+  checkbox, multiselect).
+- **Web con autenticación real:** login/registro/logout completos (Argon2id), aislamiento
+  por usuario, dashboard, wizard de 5 pasos, plan, explicabilidad, historial, evolución,
+  perfil y "Acerca de".
+- **Persistencia del plan activo:** `database.save_profile(profile, extra)` guarda los
+  resultados calculados y la web los reconstruye tras relogin
+  (`_load_latest_results`).
+- **Antidestello del asistente:** `_ev_defs` mapea claves canónicas→etiquetas y
+  `_defaults_in` filtra los defaults de los multiselects (nunca una
+  `StreamlitAPIException` por valores legados o rejugados).
+
+## 25.3 Verificación (E2E + visual + suite)
+
+- **Escritorio:** smoke 16/16 (`ALL_DESKTOP_SMOKE_PASS`): registro, login, 8 páginas,
+  error inline en wizard, generación, historial→base, logout/relogin.
+- **Web:** escenarios 1–10 (registro/login/logout reales, wizard sembrado, plan
+  determinista, relogin con plan activo, evolución, lógica del experto, perfil).
+- **Visual (capturas + análisis PIL):** sin `rojo_critico` en web tras el tema; paleta
+  navy/teal en las 9 vistas del escritorio y 4 del web; el único rojo es el aviso médico
+  diseñado.
+- **Suite:** 154 pruebas en verde (146 del informe original + 8 de identidad en
+  `tests/test_design_system.py`).
+- **Limpieza:** usuarios de prueba retirados de `auth_db.json`/`usuarios.json`
+  (respaldados en `backups_pruebas_fase2/`) y `local_session.json` eliminado.
