@@ -1,0 +1,45 @@
+# ── FitExpert · Dependencias externas de Python ─────────────────────────────
+# Instalación completa del proyecto:
+#     pip install -r requirements.txt
+#
+# Versiones validadas con las que el proyecto funciona actualmente
+# (Python 3.12 / 3.14, Windows). Se fijan con `==` para reproducibilidad;
+# si necesitas un Python más antiguo, baja los pines incompatibles.
+#
+# Origen de la lista (detección por imports reales en el código):
+#   - customtkinter  → app_desktop.pyw        (cliente de escritorio)
+#   - matplotlib     → app_desktop.pyw, gui.py(gráficos de evolución)
+#   - reportlab      → pdf_exporter.py        (exportación PDF del plan)
+#   - rich           → ui.py, main.py         (interfaz de consola CLI)
+#   - streamlit      → gui.py                 (cliente web)
+#   - argon2-cffi    → auth.py                (Argon2id; fallback PBKDF2
+#                                               de la librería estándar si falta)
+
+# ── Ejecución: Escritorio nativo ────────────────────────────────────────────
+customtkinter==5.2.2
+
+# ── Ejecución: Web (Streamlit) ──────────────────────────────────────────────
+streamlit==1.58.0
+
+# ── Ejecución: Consola (Rich CLI) ───────────────────────────────────────────
+rich==15.0.0
+
+# ── Núcleo compartido ───────────────────────────────────────────────────────
+# Seguridad de credenciales (Argon2id preferido; si no puede instalarse,
+# auth.py degrada automáticamente a PBKDF2-HMAC-SHA256 de la stdlib).
+argon2-cffi==25.1.0
+# Gráficos: web (figure::pyplot) y escritorio (FigureCanvasTkAgg).
+matplotlib==3.10.9
+# Exportación de planes a PDF.
+reportlab==5.0.0
+
+# ── Desarrollo / documentación (no requeridos para ejecutar la app) ────────
+# Generación del Word de 24 capítulos (build_final_docx.py).
+python-docx==1.2.0
+# Suite de pruebas automatizadas (python -m pytest).
+pytest==9.1.1
+
+# Nota: el script opcional de auditoría estática `analizar_proyecto.py`
+# invoca radon/flake8/bandit como subprocesos. Son herramientas de QA
+# independientes — instálalas solo si vas a ejecutar ese reporte:
+#     pip install radon flake8 bandit
