@@ -62,6 +62,10 @@ FONT_FAMILY_WEB = ('"Segoe UI Variable Display", "Segoe UI Variable", '
                    '"Segoe UI", system-ui, -apple-system, sans-serif')
 FONT_FAMILY_MONO = '"Cascadia Code", "Cascadia Mono", Consolas, monospace'
 
+# SEPARACION de etiquetas del anillo de macros (px). Lo usa macros_chart
+# y los tokens CSS del mismo archivo.
+DONUT_LABEL_GAP = 16
+
 # Escala de tipo compartida (px)
 TYPE = {
     "display": 32,   # números estrella / hero
@@ -972,6 +976,10 @@ summary { color: var(--fx-text) !important; font-weight: 650; font-size: .9rem; 
     .fx-dayhd-chev { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
 }
 
+/* Tarjeta de macronutrientes: padding cómodo y equilibrado */
+.fx-macros { padding: 4rem 1.5rem; } 
+.fx-macros .fx-h2 { font-size: 1.1rem; margin-bottom: 0; }
+
 /* ── Acordeón de días (tarjeta por día) ─────────── */
 div[data-testid="stVerticalBlock"][class*="st-key-dia_"] {
     background: var(--fx-bg-elev); border: 1px solid var(--fx-border);
@@ -1062,6 +1070,39 @@ div[class*="st-key-exbtn_"] button[data-testid="stBaseButton-tertiary"]:hover { 
 .fx-day-rest { background: var(--fx-bg-elev-2); border: 1px dashed var(--fx-border-2);
     border-radius: 10px; padding: .45rem .8rem; margin-top: .55rem;
     color: var(--fx-muted); font-size: .8rem; }
+
+/* ── Dona de macronutrientes ────────────────────── */
+/* Dona: el anillo ocupa casi todo el ancho; texto como HTML real overlay */
+.fx-donut-wrap { position: relative; width: min(420px, 100%); margin: .9rem auto 3rem; }
+.fx-donut { width: 100%; height: auto; display: block; }
+.fx-donut-lbl { position: absolute; display: flex; flex-direction: column; gap: .05rem;
+    color: var(--fx-text); font-size: .9rem; line-height: 1.15; }
+.fx-donut-lbl.r { transform: translate(0, -50%); text-align: left; }
+.fx-donut-lbl.l { transform: translate(-100%, -50%); text-align: right; }
+.fx-donut-lbl.t { transform: translate(-50%, -100%); text-align: center; }
+.fx-donut-lbl.b { transform: translate(-50%, 0); text-align: center; }
+.fx-donut-lbl b { font-weight: 650; }
+.fx-donut-lbl small { color: var(--fx-muted); font-size: .8rem; }
+.fx-donut-ct { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; align-items: center; line-height: 1.15; }
+.fx-donut-ct b { color: var(--fx-text); font-size: 1.1rem; font-weight: 800; }
+.fx-donut-ct small { color: var(--fx-faint); font-size: .75rem; }
+.fx-donut-meta { color: var(--fx-muted); font-size: .95rem; line-height: 1.6;
+    margin-top: 1.4rem; padding-top: 1.1rem;
+    border-top: 1px solid var(--fx-border); }
+.fx-donut-meta b { color: var(--fx-text); }
+.fx-donut-meta-row { display: flex; align-items: flex-start; gap: .5rem;
+    margin-bottom: .7rem; }
+.fx-donut-meta-row > svg { flex: none; margin-top: .2rem; }
+.fx-mleg { display: none; margin-top: .8rem; gap: .35rem; }
+.fx-mleg-row { display: flex; align-items: center; gap: .5rem; font-size: .95rem; }
+.fx-mleg-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.fx-mleg-name { color: var(--fx-text); font-weight: 650; }
+.fx-mleg-val { color: var(--fx-muted); margin-left: auto; white-space: nowrap; }
+@media (max-width: 760px) {
+    .fx-donut-lbl { display: none; }
+    .fx-mleg { display: grid; }
+}
 
 /* Slot de imagen del ejercicio (lienzo integrado en la tarjeta) */
 div[data-testid="stImage"] { background: #FFFFFF; border: 1px solid var(--fx-border);

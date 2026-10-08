@@ -49,6 +49,7 @@ from pdf_exporter import export_pdf
 import design_system as DS
 import exercise_info as EI
 import ui_state as US
+import macros_chart as MC
 
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -980,22 +981,25 @@ def _generate(user: dict) -> None:
 #  Página: Plan actual (resultados)
 # ──────────────────────────────────────────────────────────────
 
-def _macros_bars(macros: dict, kcal: float) -> str:
-    total = max(float(macros.get("proteinas", 0)) * 4 +
-                float(macros.get("carbohidratos", 0)) * 4 +
-                float(macros.get("grasas", 0)) * 9, 1)
-    p = float(macros.get("proteinas", 0))
-    c = float(macros.get("carbohidratos", 0))
-    g = float(macros.get("grasas", 0))
-    pw, cw, gw = p * 4 / total * 100, c * 4 / total * 100, g * 9 / total * 100
-
-    def bar(label, grams, pct, color):
-        return (f'<div class="fx-macro"><div class="row"><span>{label}</span>'
-                f'<b>{grams:.0f} g · {pct:.0f}%</b></div>'
-                f'<div class="fx-track"><div class="fx-fill" style="width:{min(pct,100):.0f}%;'
-                f'background:{color};"></div></div></div>')
-    return bar("Proteínas", p, pw, DS.PRIMARY) + bar("Carbohidratos", c, cw, DS.ACCENT) \
-        + bar("Grasas", g, gw, DS.GOLD)
+def _macros_card(macros: dict, target_calories: float, hidratacion: str) -> str:
+    """Tarjeta derecha de la pestaña Nutrición: dona + texto informativo."""
+    svg = MC.donut_svg(macros, target_calories)
+    legend = ""
+    if not svg:
+        legend = '<div class="fx-day-rest">No hay datos de macronutrientes.</div>'
+    else:
+        legend = (f'<div class="fx-donut-meta">'
+                  f'<div class="fx-donut-meta-row">{DS.icon_svg("objetivo", 15)}'
+                  f'<span>Meta diaria: <b>{target_calories:.0f} kcal</b></span></div>'
+                  f'<div class="fx-donut-meta-row">{DS.icon_svg("agua", 15)}'
+                  f'<span>Hidratación: <b>{hidratacion}</b></span></div>'
+                  f'</div>'
+                  + MC.macro_legend_html(macros))
+    return (f'<div class="fx-card fx-card--accent fx-macros">'
+            f'<div class="fx-h2">Distribución de macronutrientes</div>'
+            + (svg if svg else "")
+            + legend
+            + '</div>')
 
 
 def _meal_card(name: str, items: list) -> str:
@@ -1139,14 +1143,7 @@ def _page_plan(user: dict) -> None:
 
     # ── Nutrición ──────────────────────────────────────────────
     with tab_nut:
-        c_mac, c_meals = st.columns([1, 1.7])
-        with c_mac:
-            st.markdown(
-                f'<div class="fx-card fx-card--accent"><div class="fx-h2">Distribución de macronutrientes</div>'
-                f'{_macros_bars(plan.get("macros", {}), perfil.target_calories)}'
-                f'<p>Meta diaria: <b>{perfil.target_calories:.0f} kcal</b> · '
-                f'Hidratación recomendada: <b>{plan.get("plan", {}).get("hidratacion", "—")}</b></p>'
-                f'</div>', unsafe_allow_html=True)
+        c_meals, c_mac = st.columns([1.5, 1])
         with c_meals:
             st.markdown('<div class="fx-h2">Menú recomendado</div>', unsafe_allow_html=True)
             _plan = plan.get("plan", {})
@@ -1155,6 +1152,10 @@ def _page_plan(user: dict) -> None:
                 items = _plan.get(key) or []
                 if items:
                     st.markdown(_meal_card(name, items), unsafe_allow_html=True)
+        with c_mac:
+            st.markdown(_macros_card(plan.get("macros", {}), perfil.target_calories,
+                                     plan.get("plan", {}).get("hidratacion", "—")),
+                        unsafe_allow_html=True)
 
         sustituciones = plan.get("sustituciones") or []
         if sustituciones:
