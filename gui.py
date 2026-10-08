@@ -47,6 +47,8 @@ from nutrition import generate_nutrition_plan
 from training import generate_training_plan
 from pdf_exporter import export_pdf
 import design_system as DS
+import exercise_info as EI
+import ui_state as US
 
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -83,6 +85,7 @@ def _defaults() -> None:
     st.session_state.setdefault("fx_hist_sel", 0)
     st.session_state.setdefault("fx_note_ok", None)
     st.session_state.setdefault("fx_hi", None)            # mensaje de bienvenida temporal
+    st.session_state.setdefault("fx_exercise", None)      # slug del ejercicio elegido (abre ficha)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1001,9 +1004,86 @@ def _meal_card(name: str, items: list) -> str:
             f'</div>{lis}</div>')
 
 
+@st.dialog("Ficha del ejercicio", width="large")
+def _exercise_dialog(slug: str, perfil=None) -> None:
+    """Modal con la ficha informativa de un ejercicio (catálogo EI)."""
+    ficha = EI.get_ficha(slug)
+    import html as _html
+    esc = lambda s: _html.escape(str(s))
+
+    st.markdown(f'<div class="fx-h2">{esc(ficha.get("nombre", "Ejercicio"))}</div>',
+                unsafe_allow_html=True)
+
+    chips = _chip(ficha.get("categoria", "—"), "primary") + " " + \
+        _chip(ficha.get("grupo_muscular", "—"), "info")
+    for sec in ficha.get("secundarios", []) or []:
+        chips += " " + _chip(esc(sec), "muted")
+    st.markdown(chips, unsafe_allow_html=True)
+
+    # Slot de imagen (lienzo 4:3) — nunca lanza excepción
+    ruta = EI.resolve_exercise_image(ficha.get("slug", slug))
+    if ruta is not None:
+        st.image(str(ruta), use_container_width=True)
+    else:
+        st.markdown(
+            '<div class="fx-eximg fx-eximg--empty">'
+            f'{DS.icon_svg("imagen", 34, "currentColor", 1.6)}'
+            f'<div class="t">Imagen del ejercicio próximamente</div>'
+            f'<div class="s">{esc(ficha.get("nombre", ""))}</div>'
+            '</div>', unsafe_allow_html=True)
+
+    st.markdown(f'<div class="fx-rule"><div><div class="exp">{esc(ficha.get("descripcion", ""))}</div></div></div>',
+                unsafe_allow_html=True)
+
+    def _bloque(titulo, items):
+        if items:
+            cuerpo = "".join(f"• {esc(x)}<br>" for x in items)
+            st.markdown(DS.alert_html("info", titulo, cuerpo), unsafe_allow_html=True)
+
+    _bloque("Ejecución paso a paso", ficha.get("pasos"))
+    _bloque("Errores comunes", ficha.get("errores"))
+    _bloque("Consejos y seguridad", ficha.get("consejos"))
+
+    extra = []
+    if ficha.get("respiracion"):
+        extra.append(f"<b>Respiración:</b> {esc(ficha['respiracion'])}")
+    if ficha.get("tempo"):
+        extra.append(f"<b>Tempo:</b> {esc(ficha['tempo'])}")
+    if ficha.get("regresion"):
+        extra.append(f"<b>Regresión:</b> {esc(ficha['regresion'])}")
+    if ficha.get("progresion"):
+        extra.append(f"<b>Progresión:</b> {esc(ficha['progresion'])}")
+    if extra:
+        st.markdown(DS.alert_html("violet", "Técnica", "<br>".join(extra)),
+                    unsafe_allow_html=True)
+
+    # Precauciones enlazadas a la matriz de lesiones y al perfil activo
+    zonas = EI.lesion_labels(ficha.get("lesiones"))
+    if zonas:
+        cuerpo = "Contraindicado o requiere precaución en: " + ", ".join(esc(z) for z in zonas) + "."
+        if perfil is not None and getattr(perfil, "injuries", None):
+            activas = [INJURY_OPTIONS.get(i, i) for i in perfil.injuries]
+            cuerpo += f"<br>Tu perfil registra: {esc(', '.join(activas))}. " \
+                      "Considera la regresión o consulta a un profesional."
+        st.markdown(DS.alert_html("warn", "Precauciones", cuerpo),
+                    unsafe_allow_html=True)
+
+    if st.button("Cerrar", key=f"exclose_{slug}", use_container_width=True):
+        st.rerun()
+
+
+def _toggle_dia(slug_dia: str) -> None:
+    clave = f"dia_abierto_{slug_dia}"
+    st.session_state[clave] = not st.session_state.get(clave, False)
+
+
 def _page_plan(user: dict) -> None:
     _top("plan", "Plan actual", "Tu nutrición, tu entrenamiento y el razonamiento del experto.")
     res = st.session_state.fx_results or _load_latest_results(user["user_id"])
+    if res is not None and st.session_state.get("fx_results") is None:
+        # Cachea en sesión: evita releer usuarios.json (y regenerar el plan
+        # en sesiones antiguas) en cada rerun de esta página.
+        st.session_state.fx_results = res
 
     if not res:
         _empty("plan", "Sin plan activo",
@@ -1101,27 +1181,88 @@ def _page_plan(user: dict) -> None:
             f'de la semana · {chip_dias}</p>'
             f'</div>', unsafe_allow_html=True)
 
-        col1, col2 = st.columns(2)
+        # ── Acordeón de días: estado inicial SOLO una vez por plan ──
+        plan_key = US.plan_key_de(perfil, rutina)
+        if st.session_state.get("fx_plan_key") != plan_key:
+            st.session_state.fx_plan_key = plan_key
+            abiertos_ini = US.dias_abiertos_iniciales(dias)
+            for _d in dias:
+                _nom = US.nombre_de_dia(_d)
+                st.session_state[f"dia_abierto_{EI.slugify(_nom)}"] = (
+                    EI.slugify(_nom) in abiertos_ini)
+
+        _hoy = ["lunes", "martes", "miércoles", "jueves", "viernes",
+                "sábado", "domingo"][datetime.now().weekday()]
+
         for i, day in enumerate(dias):
-            with (col1 if i % 2 == 0 else col2):
-                if day.get("descanso"):
+            nombre_dia = day.get("dia", "")
+            _slug_dia = EI.slugify(nombre_dia)
+            abierto = bool(st.session_state.get(f"dia_abierto_{_slug_dia}", False))
+            es_descanso = US.es_descanso(day)
+            n_ej = US.conteo_ejercicios(day)
+            chip_kind = "neutral" if (es_descanso or "descanso" in US._norm(day.get("grupo", ""))) else ""
+            etiqueta_foco = "Descanso" if es_descanso else (day.get("grupo", "") or "—")
+
+            with st.container(key=f"{'dia_rest_' if es_descanso else 'dia_'}{_slug_dia}"):
+                if abierto:
+                    st.markdown('<span class="fx-day-open-marker" style="display:none"></span>',
+                                unsafe_allow_html=True)
+                _sub = US.texto_secundario_dia(day)
+                if es_descanso:
+                    _sub = f'{DS.icon_svg("luna", 12)} {_sub}'
+                with st.container(key=f"hd_{_slug_dia}"):
                     st.markdown(
-                        f'<div class="fx-day"><div class="hd"><span class="dayname">{day.get("dia", "")}</span>'
-                        f'{_chip("Descanso", "muted")}</div>'
-                        f'<p style="color:var(--fx-faint);font-size:.82rem;">Día de recuperación.</p></div>',
+                        f'<div class="fx-dayhd">'
+                        f'<div class="fx-dayhd-txt">'
+                        f'<div class="fx-dayhd-name">{nombre_dia}'
+                        f'{"<span class=\"fx-day-chip hoy\">Hoy</span>" if EI.slugify(nombre_dia) == EI.slugify(_hoy) else ""}'
+                        f'</div>'
+                        f'<div class="fx-dayhd-sub">{_sub}</div>'
+                        f'</div>'
+                        f'<span class="fx-day-chip {chip_kind}">{etiqueta_foco}</span>'
+                        f'<span class="fx-dayhd-chev fx-chev {"open" if abierto else ""}">'
+                        f'{DS.icon_svg("flecha_der", 16)}</span>'
+                        '</div>',
                         unsafe_allow_html=True)
-                else:
-                    ejercicios = "".join(
-                        f'<div class="fx-ex"><span class="nm">{e[0]}</span>'
-                        f'<span class="dt">{e[1] if len(e) > 1 else ""}{" · " + e[2] if len(e) > 2 else ""}</span></div>'
-                        for e in day.get("ejercicios", []))
+                    st.button(f"{nombre_dia} — {US.texto_secundario_dia(day)}",
+                              key=f"hdbtn_{_slug_dia}",
+                              type="tertiary", use_container_width=True,
+                              on_click=_toggle_dia, args=(_slug_dia,))
+
+                if not abierto:
+                    continue
+
+                st.markdown('<div class="fx-day-sep"></div>', unsafe_allow_html=True)
+
+                if es_descanso:
                     st.markdown(
-                        f'<div class="fx-day"><div class="hd"><span class="dayname">{day.get("dia", "")}</span>'
-                        f'<span class="grp">{day.get("grupo", "")}</span></div>'
-                        f'{ejercicios}'
-                        f'<div class="fx-rest">Descanso entre series: '
-                        f'{day.get("descanso_entre_series", "—")}</div></div>',
+                        '<div class="fx-day-rest">Día de recuperación: sin ejercicios '
+                        'programados. Si te apetece, un paseo suave o movilidad ligera.</div>',
                         unsafe_allow_html=True)
+                    continue
+
+                for ei_idx, e in enumerate(day.get("ejercicios", [])):
+                    nombre = e[0] if len(e) > 0 else ""
+                    slug = EI.slugify(nombre)
+                    detalle = f'{e[1] if len(e) > 1 else ""}{" · " + e[2] if len(e) > 2 else ""}'
+                    with st.container(key=f"ex_{i}_{ei_idx}_{slug}"):
+                        st.markdown(
+                            f'<div class="fx-exrow">'
+                            f'<span class="fx-exrow-name">{nombre}</span>'
+                            f'<span class="fx-exrow-detail">{detalle}</span>'
+                            '</div>', unsafe_allow_html=True)
+                        if st.button(f"{nombre} — {detalle}",
+                                     key=f"exbtn_{i}_{ei_idx}_{slug}",
+                                     type="tertiary", use_container_width=True):
+                            st.session_state.fx_exercise = slug
+                if not day.get("ejercicios"):
+                    st.markdown(
+                        '<div class="fx-day-rest">Sin ejercicios programados para este día.</div>',
+                        unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="fx-day-rest">Descanso entre series: '
+                    f'{day.get("descanso_entre_series", "—")}</div>',
+                    unsafe_allow_html=True)
 
         if rutina.get("lesiones_consideradas"):
             st.markdown(DS.alert_html(
@@ -1138,6 +1279,12 @@ def _page_plan(user: dict) -> None:
     # ── Explicación ────────────────────────────────────────────
     with tab_exp:
         _render_explicacion(perfil)
+
+    # ── Apertura de ficha de ejercicio (modal) ─────
+    slug_sel = st.session_state.get("fx_exercise")
+    if slug_sel:
+        st.session_state.fx_exercise = None  # evita reaperturas en reruns
+        _exercise_dialog(slug_sel, perfil)
 
     st.markdown(_foot(), unsafe_allow_html=True)
 

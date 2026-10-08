@@ -267,6 +267,10 @@ def _ic(inner: str) -> str:
 
 
 ICONS = {
+    "imagen": _ic('<rect x="3" y="4.5" width="18" height="15" rx="2.5"/>'
+                  '<circle cx="9" cy="10" r="2"/>'
+                  '<path d="M4.5 18l4.5-4.5 3 3 3.5-3.5 4.5 4.5"/>'),
+    "luna": _ic('<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/>'),
     "inicio": _ic('<polyline points="2.5 11 12 3.5 21.5 11"/><path d="M6 9.5V21h12V9.5"/>'
                   '<path d="M9.5 21v-6h5v6"/>'),
 
@@ -573,8 +577,12 @@ _CSS_BODY = """
 }
 html, body, .stApp { background: var(--fx-bg); }
 .block-container { max-width: 1060px; padding-top: 1.1rem; padding-bottom: 4rem; }
-#MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; height: 0; }
-[data-testid="stToolbar"] { display: none; }
+#MainMenu, footer { display: none; }
+#MainMenu, [data-testid="stMainMenu"], [data-testid="stAppDeployButton"],
+[data-testid="stToolbarActions"] { display: none; }
+/* OJO: NO ocultar stHeader/stToolbar/stExpandSidebarButton — ahí vive el
+   botón que reabre la sidebar cuando está plegada (validado con
+   Streamlit 1.58). Solo ocultar accesorios. */
 ::selection { background: var(--fx-primary-soft); color: var(--fx-text); }
 * { transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease; }
 
@@ -591,6 +599,40 @@ button, input, textarea, select, legend, small, strong, em {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--fx-bg-3); border-radius: 8px; border: 2px solid var(--fx-bg); }
 ::-webkit-scrollbar-thumb:hover { background: var(--fx-border-2); }
+
+/* ── Iconos nativos de Streamlit (validado con Streamlit 1.58) ── */
+/* Los iconos son LIGADURAS de "Material Symbols Rounded": si heredan la
+   tipografía de marca, el ligature se ve como TEXTO CRUDO ("keyboard_double",
+   "keyboard_arrow_down"…). Se restaura explícitamente la fuente de iconos. */
+span[data-testid="stIconMaterial"],
+span.material-symbols-rounded,
+.material-symbols-rounded,
+.material-symbols,
+.material-icons,
+.material-icons-outlined,
+.material-icons-round {
+    font-family: "Material Symbols Rounded", "Material Icons", sans-serif !important;
+    font-feature-settings: "liga";
+    -webkit-font-feature-settings: "liga";
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* Botones de plegar/expandir la sidebar con identidad teal/navy */
+button[data-testid="stSidebarCollapseButton"],
+button[data-testid="stExpandSidebarButton"] {
+    background: var(--fx-bg-elev) !important;
+    border: 1px solid var(--fx-border) !important;
+    border-radius: 10px !important;
+    color: var(--fx-muted) !important;
+    padding: .35rem;
+    transition: border-color .18s ease, color .18s ease, background .18s ease; }
+button[data-testid="stSidebarCollapseButton"]:hover,
+button[data-testid="stExpandSidebarButton"]:hover {
+    border-color: var(--fx-primary) !important; color: var(--fx-primary) !important;
+    background: var(--fx-bg-elev-2) !important; }
+button[data-testid="stSidebarCollapseButton"]:focus-visible,
+button[data-testid="stExpandSidebarButton"]:focus-visible {
+    outline: 2px solid var(--fx-primary) !important; outline-offset: 1px; }
 
 /* ── Tipografía de producto ──────────────────────── */
 .fx-kicker { font-size: .72rem; font-weight: 700; letter-spacing: .14em;
@@ -924,6 +966,116 @@ summary { color: var(--fx-text) !important; font-weight: 650; font-size: .9rem; 
     .fx-hero { font-size: 1.6rem; }
     .fx-band { grid-template-columns: 1fr 1fr; }
 }
+@media (max-width: 720px) {
+    .fx-dayhd .fx-day-chip { margin-left: 0; }
+    .fx-dayhd { row-gap: .3rem; padding-right: 1.6rem; }
+    .fx-dayhd-chev { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+}
+
+/* ── Acordeón de días (tarjeta por día) ─────────── */
+div[data-testid="stVerticalBlock"][class*="st-key-dia_"] {
+    background: var(--fx-bg-elev); border: 1px solid var(--fx-border);
+    border-radius: 16px; padding: 1.5rem 1.05rem; margin-bottom: .9rem;
+    position: relative;
+    transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
+div[data-testid="stVerticalBlock"][class*="st-key-dia_"]:hover {
+    border-color: rgba(45,212,191,.45); background: var(--fx-bg-elev-2); }
+div[data-testid="stVerticalBlock"][class*="st-key-dia_"]:has(.fx-day-open-marker) {
+    border-color: var(--fx-primary);
+    border-left: 3px solid var(--fx-primary);
+    box-shadow: 0 0 0 1px rgba(45,212,191,.12); }
+div[data-testid="stVerticalBlock"][class*="st-key-dia_"][class*="st-key-dia_rest"] {
+    background: var(--fx-bg-2); }
+div[data-testid="stVerticalBlock"][class*="st-key-dia_"][class*="st-key-dia_rest"]:hover {
+    border-color: var(--fx-border-2); }
+
+/* Base del botón terciario (nombre de día y ejercicios) */
+button[data-testid="stBaseButton-tertiary"] {
+    color: var(--fx-text) !important; background: transparent !important;
+    border: none !important; text-decoration: none; width: 100%;
+    padding: .3rem 0; text-align: left; justify-content: flex-start; }
+button[data-testid="stBaseButton-tertiary"] div,
+button[data-testid="stBaseButton-tertiary"] p { text-align: left !important; width: 100%; }
+button[data-testid="stBaseButton-tertiary"]:hover { color: var(--fx-primary) !important; }
+button[data-testid="stBaseButton-tertiary"]:focus-visible { outline: 2px solid var(--fx-primary) !important; }
+
+/* Cabecera: contenedor relativo y botón transparente superpuesto */
+div[data-testid="stVerticalBlock"][class*="st-key-hd_"] { position: relative; }
+div[data-testid="stVerticalBlock"][class*="st-key-hd_"]
+  div[data-testid="stElementContainer"]:has(button[data-testid="stBaseButton-tertiary"]) {
+    position: absolute; inset: 0; margin: 0; }
+div[class*="st-key-hdbtn_"] button[data-testid="stBaseButton-tertiary"],
+div[class*="st-key-hd_"] button[data-testid="stBaseButton-tertiary"] {
+    color: transparent !important; background: transparent !important; border: none !important;
+    width: 100%; height: 100%; position: absolute; inset: 0; cursor: pointer;
+    padding: 0; text-align: left; }
+div[class*="st-key-hd_"] button[data-testid="stBaseButton-tertiary"]:hover { color: transparent !important; }
+
+/* Fila de cabecera: [bloque texto] [chip] [chevron], centrada verticalmente */
+.fx-dayhd { display: flex; align-items: center; gap: .7rem; position: relative;
+    flex-wrap: wrap; row-gap: .35rem; padding: .15rem 0; }
+.fx-dayhd-txt { display: flex; flex-direction: column; align-items: flex-start;
+    gap: .05rem; text-align: left; min-width: 0; }
+.fx-dayhd-name { font-weight: 800; font-size: .98rem; color: var(--fx-text);
+    display: flex; align-items: center; gap: .5rem; line-height: 1.25; }
+.fx-dayhd-sub { color: var(--fx-faint); font-size: .76rem; line-height: 1.3; }
+.fx-dayhd .fx-day-chip { margin-left: auto; }
+.fx-chev { display: inline-flex; color: var(--fx-muted); }
+.fx-chev svg { transition: transform .18s ease; display: block; }
+.fx-chev.open svg { transform: rotate(90deg); }
+.fx-day-sep { border-top: 1px dashed var(--fx-border); margin: .6rem 0 .3rem; }
+.fx-day-chip { display: inline-flex; align-items: center; padding: .16rem .62rem;
+    border-radius: 999px; font-size: .7rem; font-weight: 700; letter-spacing: .03em;
+    background: rgba(45,212,191,.12); color: var(--fx-primary);
+    border: 1px solid rgba(45,212,191,.35); white-space: nowrap; }
+.fx-day-chip.neutral { background: var(--fx-bg-elev-2); color: var(--fx-muted);
+    border-color: var(--fx-border); }
+.fx-day-chip.hoy { background: rgba(245,185,68,.12); color: var(--fx-gold);
+    border-color: rgba(245,185,68,.4); }
+
+/* Filas de ejercicio: separador sutil, mismo patrón overlay que el encabezado */
+div[data-testid="stVerticalBlock"][class*="st-key-ex_"] {
+    border-top: 1px dashed var(--fx-border); position: relative; }
+div[data-testid="stVerticalBlock"][class*="st-key-ex_"]:hover {
+    background: var(--fx-bg-elev-2); border-radius: 8px; }
+div[data-testid="stVerticalBlock"][class*="st-key-ex_"]
+  div[data-testid="stElementContainer"]:has(button[data-testid="stBaseButton-tertiary"]) {
+    position: absolute; inset: 0; margin: 0; }
+div[class*="st-key-exbtn_"] button[data-testid="stBaseButton-tertiary"] {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    color: transparent !important; background: transparent !important; border: none !important;
+    padding: 0; text-align: left; cursor: pointer; }
+div[class*="st-key-exbtn_"] button[data-testid="stBaseButton-tertiary"]:hover { color: transparent !important; }
+
+/* Fila: [nombre .......... series · tipo], centrada verticalmente */
+.fx-exrow { display: flex; align-items: center; gap: .7rem; padding: .3rem 0; }
+.fx-exrow-name { color: var(--fx-text); font-weight: 650; font-size: .88rem;
+    min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
+.fx-exrow-detail { margin-left: auto; color: var(--fx-muted); font-size: .78rem;
+    font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.3; }
+@media (max-width: 720px) {
+    .fx-exrow { flex-wrap: wrap; row-gap: .15rem; }
+    .fx-exrow-detail { margin-left: 0; white-space: normal; }
+}
+
+/* Recuadro de descanso integrado en la tarjeta */
+.fx-day-rest { background: var(--fx-bg-elev-2); border: 1px dashed var(--fx-border-2);
+    border-radius: 10px; padding: .45rem .8rem; margin-top: .55rem;
+    color: var(--fx-muted); font-size: .8rem; }
+
+/* Slot de imagen del ejercicio (lienzo integrado en la tarjeta) */
+div[data-testid="stImage"] { background: #FFFFFF; border: 1px solid var(--fx-border);
+    border-radius: 14px; padding: .9rem; margin-bottom: .9rem; }
+div[data-testid="stImage"] img { max-height: 420px; object-fit: contain;
+    border-radius: 10px; }
+.fx-eximg { aspect-ratio: 4 / 3; border-radius: 14px; }
+.fx-eximg--empty { background: var(--fx-bg-elev); border: 1.5px dashed var(--fx-border-2);
+                   color: var(--fx-faint); display: flex; flex-direction: column;
+                   gap: .4rem; align-items: center; justify-content: center;
+                   text-align: center; margin-bottom: .9rem; padding: 2rem 1rem;
+                   border-radius: 14px; }
+.fx-eximg--empty .t { color: var(--fx-muted); font-size: .8rem; font-weight: 650; }
+.fx-eximg--empty .s { color: var(--fx-faint); font-size: .72rem; }
 """
 
 WEB_CSS = "<style>" + _CSS_ROOT + _CSS_BODY + "</style>"

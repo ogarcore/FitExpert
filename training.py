@@ -701,8 +701,16 @@ def _pick_exercises(keys: list, profile: UserProfile, n: int = 5) -> dict:
     alternatives_idx: list = []     # (sustituido, por, sustituto)
 
     safe_tuples = []
+    elegidos_keys: set = set()  # ejercicio (clave de catálogo) ya incluido
+
+    def _añadir(key: str, entry: dict) -> None:
+        safe_tuples.append((entry["nombre"], entry["series"], entry["musculo"]))
+        elegidos_keys.add(key)
+
     for key in keys:
         if key not in EXERCISE_LIBRARY:
+            continue
+        if key in elegidos_keys:
             continue
         entry = EXERCISE_LIBRARY[key]
 
@@ -720,13 +728,15 @@ def _pick_exercises(keys: list, profile: UserProfile, n: int = 5) -> dict:
         if contraindicado:
             excluded_by_injury[key] = contraindicado[0]
             alt_key = _safe_alternative(key, injuries, available, forbidden_age)
-            if alt_key and (alt_key, key) not in alternatives_idx:
+            if alt_key and alt_key not in elegidos_keys:
+                # Dedup: una misma alternativa nunca aparece dos veces, ni
+                # sustituye a sí misma, dentro del mismo día.
                 alt = EXERCISE_LIBRARY[alt_key]
                 alternatives_idx.append((key, alt_key, contraindicado[0]))
-                safe_tuples.append((alt["nombre"], alt["series"], alt["musculo"]))
+                _añadir(alt_key, alt)
             continue
 
-        safe_tuples.append((entry["nombre"], entry["series"], entry["musculo"]))
+        _añadir(key, entry)
 
     # Sin repetición y con variedad
     random.shuffle(safe_tuples)
@@ -740,7 +750,21 @@ def _pick_exercises(keys: list, profile: UserProfile, n: int = 5) -> dict:
             f"lesión ({_lesion_label(lesion)})."
         )
 
-    return {"elegidos": chosen, "alternativas": notas_lesion}
+    return {"elegidos": chosen, "alternativas": notas_lesion,
+            "excluidos": len(excluded_by_injury)}
+
+
+def _unique_ejercicios(ejercicios: list) -> list:
+    """Salvaguarda defensiva: nunca dos filas idénticas en un mismo día."""
+    seen: set = set()
+    out = []
+    for e in ejercicios:
+        nombre = e[0] if isinstance(e, (tuple, list)) else str(e)
+        if nombre in seen:
+            continue
+        seen.add(nombre)
+        out.append(e)
+    return out
 
 
 def _lesion_label(lesion_key: str) -> str:
@@ -1062,8 +1086,9 @@ def generate_training_plan(profile: UserProfile) -> dict:
             continue
 
         resultado = _pick_exercises(keys, profile, n=exercises_per_session)
-        ejercicios = resultado["elegidos"]
+        ejercicios = _unique_ejercicios(resultado["elegidos"])
         todas_alternativas.extend(resultado["alternativas"])
+        reduccion_nota = (resultado["excluidos"] > 0 or not ejercicios)
 
         # Nunca dejar una sesión vacía: si las restricciones excluyeron todo,
         # cubrir con movimientos seguros de bajo impacto aún disponibles
@@ -1073,7 +1098,7 @@ def generate_training_plan(profile: UserProfile) -> dict:
             fallback = _pick_exercises(
                 FALLBACK_BASIC, profile, n=max(3, exercises_per_session - 2)
             )
-            ejercicios = fallback["elegidos"]
+            ejercicios = _unique_ejercicios(fallback["elegidos"])
             todas_alternativas.extend(fallback["alternativas"])
             if ejercicios:
                 destino_note = (
@@ -1115,7 +1140,10 @@ def generate_training_plan(profile: UserProfile) -> dict:
             "descanso_entre_series": descanso_s,
             "nota":       _get_session_note(grupo, profile) + (
                 " " + destino_note if destino_note != "sin fallback" else ""
-            ),
+            ) + (" Rutina reducida por tus condiciones de seguridad."
+                 if (resultado["excluidos"] > 0 and destino_note == "sin fallback"
+                     and ejercicios and len(ejercicios) < exercises_per_session)
+                 else ""),
         })
 
     dias_entrenamiento = sum(1 for d in semana if not d["descanso"])
