@@ -45,36 +45,36 @@ Coloca la imagen con el nombre del slug y una de estas extensiones:
 | `jumping_jacks` | Jumping jacks | sí |
 | `kickback_de_triceps_con_mancuerna` | Kickback de tríceps con mancuerna | sí |
 | `marcha_con_elevacion_de_rodillas` | Marcha con elevación de rodillas | sí |
-| `mountain_climbers` | Mountain climbers | pendiente |
-| `nordic_curl_curl_nordico` | Nordic curl (curl nórdico) | pendiente |
-| `peso_muerto_convencional` | Peso muerto convencional | pendiente |
-| `peso_muerto_rumano_con_mancuernas` | Peso muerto rumano con mancuernas | pendiente |
-| `plancha_abdominal` | Plancha abdominal | pendiente |
-| `plancha_lateral` | Plancha lateral | pendiente |
-| `prensa_de_piernas` | Prensa de piernas | pendiente |
-| `press_arnold` | Press Arnold | pendiente |
-| `press_de_banca_con_barra` | Press de banca con barra | pendiente |
-| `press_de_banca_con_mancuernas` | Press de banca con mancuernas | pendiente |
-| `press_de_hombros_con_mancuernas` | Press de hombros con mancuernas | pendiente |
-| `press_en_cable_cruzado` | Press en cable cruzado | pendiente |
-| `press_frances_con_barra` | Press francés con barra | pendiente |
-| `press_militar_con_barra` | Press militar con barra | pendiente |
-| `puente_de_gluteos` | Puente de glúteos | pendiente |
-| `remo_con_banda_elastica` | Remo con banda elástica | pendiente |
-| `remo_con_barra` | Remo con barra | pendiente |
-| `remo_con_mancuerna_a_una_mano` | Remo con mancuerna a una mano | pendiente |
-| `remo_en_maquina` | Remo en máquina | pendiente |
-| `remo_invertido_con_mesa_o_barra_baja` | Remo invertido (con mesa o barra baja) | pendiente |
-| `rotacion_externa_con_banda` | Rotación externa con banda | pendiente |
-| `rotaciones_de_cadera` | Rotaciones de cadera | pendiente |
-| `rueda_abdominal_rollout` | Rueda abdominal (rollout) | pendiente |
-| `saltos_a_la_cuerda` | Saltos a la cuerda | pendiente |
-| `sentadilla_asistida_con_apoyo` | Sentadilla asistida (con apoyo) | pendiente |
-| `sentadilla_bulgara` | Sentadilla búlgara | pendiente |
-| `sentadilla_con_peso_corporal` | Sentadilla con peso corporal | pendiente |
-| `sentadilla_goblet_con_mancuerna` | Sentadilla goblet con mancuerna | pendiente |
-| `sentadilla_libre_con_barra` | Sentadilla libre con barra | pendiente |
-| `sentadilla_sumo` | Sentadilla sumo | pendiente |
-| `zancada_estatica` | Zancada estática | pendiente |
+| `mountain_climbers` | Mountain climbers | sí |
+| `nordic_curl_curl_nordico` | Nordic curl (curl nórdico) | sí |
+| `peso_muerto_convencional` | Peso muerto convencional | sí |
+| `peso_muerto_rumano_con_mancuernas` | Peso muerto rumano con mancuernas | sí |
+| `plancha_abdominal` | Plancha abdominal | sí |
+| `plancha_lateral` | Plancha lateral | sí |
+| `prensa_de_piernas` | Prensa de piernas | sí |
+| `press_arnold` | Press Arnold | sí |
+| `press_de_banca_con_barra` | Press de banca con barra | sí |
+| `press_de_banca_con_mancuernas` | Press de banca con mancuernas | sí |
+| `press_de_hombros_con_mancuernas` | Press de hombros con mancuernas | sí |
+| `press_en_cable_cruzado` | Press en cable cruzado | sí |
+| `press_frances_con_barra` | Press francés con barra | sí |
+| `press_militar_con_barra` | Press militar con barra | sí |
+| `puente_de_gluteos` | Puente de glúteos | sí |
+| `remo_con_banda_elastica` | Remo con banda elástica | sí |
+| `remo_con_barra` | Remo con barra | sí |
+| `remo_con_mancuerna_a_una_mano` | Remo con mancuerna a una mano | sí |
+| `remo_en_maquina` | Remo en máquina | sí |
+| `remo_invertido_con_mesa_o_barra_baja` | Remo invertido (con mesa o barra baja) | sí |
+| `rotacion_externa_con_banda` | Rotación externa con banda | sí |
+| `rotaciones_de_cadera` | Rotaciones de cadera | sí |
+| `rueda_abdominal_rollout` | Rueda abdominal (rollout) | sí |
+| `saltos_a_la_cuerda` | Saltos a la cuerda | sí |
+| `sentadilla_asistida_con_apoyo` | Sentadilla asistida (con apoyo) | sí |
+| `sentadilla_bulgara` | Sentadilla búlgara | sí |
+| `sentadilla_con_peso_corporal` | Sentadilla con peso corporal | sí |
+| `sentadilla_goblet_con_mancuerna` | Sentadilla goblet con mancuerna | sí |
+| `sentadilla_libre_con_barra` | Sentadilla libre con barra | sí |
+| `sentadilla_sumo` | Sentadilla sumo | sí |
+| `zancada_estatica` | Zancada estática | sí |
 
-Total: 62 ejercicios (31 con imagen).
+Total: 62 ejercicios (62 con imagen).
