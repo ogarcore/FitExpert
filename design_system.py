@@ -582,7 +582,8 @@ _CSS_BODY = """
 html, body, .stApp { background: var(--fx-bg); }
 /* El header de Streamlit es visible (botón de re-expandir la sidebar),
    por eso el contenido arranca por debajo de él, no debajo del header. */
-.block-container { max-width: 1060px; padding-top: 4.6rem; padding-bottom: 4rem; }
+div[data-testid="stMainBlockContainer"] .block-container,
+.block-container { max-width: 1060px; padding-top: 5.4rem !important; padding-bottom: 4rem; }
 #MainMenu, footer { display: none; }
 [data-testid="stMainBlockContainer"] { padding-top: 1rem; }
 #MainMenu, [data-testid="stMainMenu"], [data-testid="stAppDeployButton"],
@@ -1057,7 +1058,8 @@ summary { color: var(--fx-text) !important; font-weight: 650; font-size: .9rem; 
 
 /* ── Responsive ──────────────────────────────────── */
 @media (max-width: 900px) {
-    .block-container { max-width: 100%; padding: 4.2rem 1rem 3rem; }
+    div[data-testid="stMainBlockContainer"] .block-container,
+    .block-container { max-width: 100%; padding: 4.6rem 1rem 3rem !important; }
     .fx-hero { font-size: 1.6rem; }
     .fx-band { grid-template-columns: 1fr 1fr; }
 }
@@ -1196,10 +1198,14 @@ div[class*="st-key-exbtn_"] button[data-testid="stBaseButton-tertiary"]:hover { 
 }
 
 /* Slot de imagen del ejercicio (lienzo integrado en la tarjeta) */
-div[data-testid="stImage"] { background: #FFFFFF; border: 1px solid var(--fx-border);
+/* Lienzo blanco SOLO para la imagen del ejercicio (dentro del diálogo).
+   Sin acotar, esta regla pintaba de blanco también las gráficas de
+   matplotlib de Inicio/Progreso. */
+div[data-testid="stDialog"] div[data-testid="stImage"] {
+    background: #FFFFFF; border: 1px solid var(--fx-border);
     border-radius: 14px; padding: .9rem; margin-bottom: .9rem; }
-div[data-testid="stImage"] img { max-height: 420px; object-fit: contain;
-    border-radius: 10px; }
+div[data-testid="stDialog"] div[data-testid="stImage"] img {
+    max-height: 420px; object-fit: contain; border-radius: 10px; }
 .fx-eximg { aspect-ratio: 4 / 3; border-radius: 14px; }
 .fx-eximg--empty { background: var(--fx-bg-elev); border: 1.5px dashed var(--fx-border-2);
                    color: var(--fx-faint); display: flex; flex-direction: column;
