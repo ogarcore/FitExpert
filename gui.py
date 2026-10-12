@@ -87,6 +87,7 @@ def _defaults() -> None:
     st.session_state.setdefault("fx_note_ok", None)
     st.session_state.setdefault("fx_hi", None)            # mensaje de bienvenida temporal
     st.session_state.setdefault("fx_exercise", None)      # slug del ejercicio elegido (abre ficha)
+    st.session_state.setdefault("au_remember", False)   # "mantener sesión iniciada"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -103,6 +104,16 @@ def _auth_css() -> None:
     _css("""
     [data-testid="stSidebar"] { display: none; }
     header[data-testid="stHeader"] { display: none; }
+    /* Fondo de página con degradado navy → teal (identidad FitExpert) */
+    .stApp, [data-testid="stAppViewContainer"] {
+        background:
+            radial-gradient(900px 480px at 12% -5%, rgba(45,212,191,.14), transparent 60%),
+            radial-gradient(900px 520px at 100% 105%, rgba(61,156,255,.12), transparent 60%),
+            linear-gradient(180deg, #070B15 0%, #0A1424 55%, #062026 100%);
+        min-height: 100vh; }
+    .block-container { padding: 2.4rem 1rem 3rem; }
+    /* Ocultar los toggles Entrar/Crear cuenta duplicados del diseño */
+    div[class*="st-key-auth_form"] .fx-auth-row { margin-bottom: .9rem; }
     """)
 
 
@@ -265,84 +276,116 @@ def _run_evaluation(values: dict, warnings: list) -> dict:
 #  Autenticación
 # ──────────────────────────────────────────────────────────────
 
-def _auth_brand_html() -> str:
+def _auth_cover_html() -> str:
+    """Panel derecho de la tarjeta de acceso.
+
+    Foto opcional: copia tu imagen de persona entrenando a
+    assets/auth_cover.png (o .jpg/.jpeg/.webp) y se incrusta aquí como
+    background-image con object-fit: cover (background-size: cover).
+    Sin archivo → placeholder con degradado de marca.
+    """
+    import base64
     props = [
         ("inicio", "Un plan único, construido desde tus datos y objetivos"),
         ("escudo", "Reglas clínicas de fuentes oficiales (OMS, CDC, AAP, ACSM)"),
         ("explicacion", "Cada decisión del motor se muestra y se explica"),
     ]
     items = "".join(
-        f'<div class="fx-prop"><span class="ic">{DS.icon_svg(ic, 18, DS.PRIMARY)}</span>'
+        f'<div class="fx-prop"><span class="ic">{DS.icon_svg(ic, 17, DS.PRIMARY)}</span>'
         f'<span>{t}</span></div>' for ic, t in props)
+
+    estilo_foto = ""
+    for ext in (".png", ".jpg", ".jpeg", ".webp"):
+        cand = _ASSETS / f"auth_cover{ext}"
+        if cand.is_file():
+            mime = "jpeg" if ext in (".jpg", ".jpeg") else ext[1:]
+            b64 = base64.b64encode(cand.read_bytes()).decode()
+            estilo_foto = f"background-image:url(data:image/{mime};base64,{b64});"
+            break
+
     return (
-        f'<div class="fx-auth-wrap"><div class="fx-auth">'
-        f'<div class="fx-auth-brand">'
-        f'<div>{DS.brand_svg(46)}</div>'
+        f'<div class="fx-auth-cover" style="{estilo_foto}">'
         f'<div class="tag">Precisión que<br><b>se explica</b></div>'
-        f'<div class="desc">FitExpert es un sistema experto de nutrición y '
-        f'entrenamiento que genera y explica decisiones personalizadas '
-        f'basadas en reglas clínicas.</div>'
         f'{items}'
         f'<div class="foot">Motor de conocimiento: {len(RULES)} reglas IF/THEN · '
-        f'7 jerarquías de severidad · Evaluación guiada en 5 pasos.<br>'
+        f'7 jerarquías de severidad · Evaluación guiada en 5 pasos. '
         f'Fuentes: {", ".join(_SOURCES)}.</div>'
-        f'</div><div class="fx-auth-form">')
+        f'</div>')
 
 
-def _auth_actions() -> str:
-    return "</div></div></div>"
+def _legal_html() -> str:
+    return (
+        '<div class="fx-auth-legal">Términos de uso · Política de privacidad'
+        '<span class="note">Tus datos se almacenan solo en este equipo · '
+        'Autenticación con Argon2id · Contraseñas nunca en texto plano.</span>'
+        '</div>')
 
 
 def _render_auth() -> None:
     _auth_css()
-    st.markdown(_auth_brand_html(), unsafe_allow_html=True)
 
-    mode = st.session_state.fx_auth_mode
-    c1, c2 = st.columns(2)
-    with c1:
-        st.button("Entrar", key="am_login", use_container_width=True,
-                  type="primary" if mode == "login" else "secondary",
-                  on_click=lambda: st.session_state.update(fx_auth_mode="login"))
-    with c2:
-        st.button("Crear cuenta", key="am_register", use_container_width=True,
-                  type="primary" if mode == "register" else "secondary",
-                  on_click=lambda: st.session_state.update(fx_auth_mode="register"))
+    # Orden en el flujo: formulario (col 1) → panel de imagen (col 2).
+    # La tarjeta es un CSS grid de 2 columnas: no usa position:absolute.
+    with st.container(key="auth_card"):
+        with st.container(key="auth_form"):
+            st.markdown(f'<div class="fx-auth-logo">{DS.brand_svg(40)}</div>',
+                        unsafe_allow_html=True)
+            mode = st.session_state.fx_auth_mode
 
-    st.markdown('<div style="height:.6rem"></div>', unsafe_allow_html=True)
+            if mode == "login":
+                st.markdown('<div class="fx-auth-title">Iniciar sesión</div>'
+                            '<div class="fx-auth-sub">Accede a tu panel y reevalúa '
+                            'tu plan cuando quieras.</div>', unsafe_allow_html=True)
 
-    if mode == "login":
-        st.markdown('<div class="title">Bienvenido de nuevo</div>'
-                    '<div class="hint">Accede a tu panel y reevalúa tu plan cuando quieras.</div>',
-                    unsafe_allow_html=True)
-        u = st.text_input("Usuario", key="au_user", placeholder="Tu nombre de usuario")
-        show = st.checkbox("Mostrar contraseña", key="au_show")
-        p = st.text_input("Contraseña", key="au_pass", type="password" if not show else "default",
-                          placeholder="Tu contraseña")
-        st.markdown('<div style="height:.5rem"></div>', unsafe_allow_html=True)
-        if st.button("Acceder al panel", key="au_go", use_container_width=True,
-                     type="primary"):
-            _do_login(u, p)
-    else:
-        st.markdown('<div class="title">Crea tu cuenta</div>'
-                    '<div class="hint">Empieza con tu primera evaluación guiada (10 minutos).</div>',
-                    unsafe_allow_html=True)
-        u = st.text_input("Nombre de usuario", key="ru_user",
-                          placeholder="Sin espacios · mínimo 3 caracteres")
-        show1 = st.checkbox("Mostrar contraseñas", key="ru_show")
-        p = st.text_input("Contraseña", key="ru_pass", type="password" if not show1 else "default",
-                          placeholder="Mínimo 8 caracteres")
-        p2 = st.text_input("Confirmar contraseña", key="ru_pass2",
-                           type="password" if not show1 else "default",
-                           placeholder="Repite tu contraseña")
-        st.markdown('<div style="height:.5rem"></div>', unsafe_allow_html=True)
-        if st.button("Crear cuenta e iniciar", key="ru_go", use_container_width=True,
-                     type="primary"):
-            _do_register(u, p, p2)
+                with st.container(key="auth_fields"):
+                    u = st.text_input("Usuario o email", key="au_user",
+                                      placeholder="Tu nombre de usuario")
+                    p = st.text_input("Contraseña", key="au_pass",
+                                      type="password", placeholder="Tu contraseña")
 
-    st.markdown('<div class="ok-note">Tus datos se almacenan solo en este equipo · '
-                'Autenticación con Argon2id · Contraseñas nunca en texto plano.</div>',
-                unsafe_allow_html=True)
-    st.markdown(_auth_actions(), unsafe_allow_html=True)
+                with st.container(key="auth_remember"):
+                    c_opt, c_link = st.columns([1.15, 1], vertical_alignment="center")
+                    with c_opt:
+                        st.checkbox("Mantener sesión", key="au_remember")
+                    with c_link:
+                        st.markdown(
+                            '<div style="text-align:right">'
+                            '<a href="#" aria-disabled="true">¿Olvidaste tu contraseña?</a>'
+                            '</div>', unsafe_allow_html=True)
+
+                if st.button("Entrar", key="au_go", use_container_width=True,
+                             type="primary"):
+                    _do_login(u, p)
+
+                st.button("¿No tienes cuenta? Crear cuenta", key="am_register",
+                          use_container_width=True, type="tertiary",
+                          on_click=lambda: st.session_state.update(fx_auth_mode="register"))
+                st.markdown(_legal_html(), unsafe_allow_html=True)
+
+            else:
+                st.markdown('<div class="fx-auth-title">Crear cuenta</div>'
+                            '<div class="fx-auth-sub">Empieza con tu primera '
+                            'evaluación guiada (10 minutos).</div>',
+                            unsafe_allow_html=True)
+
+                with st.container(key="auth_fields"):
+                    u = st.text_input("Nombre de usuario", key="ru_user",
+                                      placeholder="Sin espacios · mínimo 3 caracteres")
+                    p = st.text_input("Contraseña", key="ru_pass",
+                                      type="password", placeholder="Mínimo 8 caracteres")
+                    p2 = st.text_input("Confirmar contraseña", key="ru_pass2",
+                                       type="password", placeholder="Repite tu contraseña")
+
+                if st.button("Crear cuenta e iniciar", key="ru_go",
+                             use_container_width=True, type="primary"):
+                    _do_register(u, p, p2)
+
+                st.button("¿Ya tienes cuenta? Entrar", key="am_login",
+                          use_container_width=True, type="tertiary",
+                          on_click=lambda: st.session_state.update(fx_auth_mode="login"))
+                st.markdown(_legal_html(), unsafe_allow_html=True)
+
+        st.markdown(_auth_cover_html(), unsafe_allow_html=True)
 
 
 def _do_login(u: str, p: str) -> None:

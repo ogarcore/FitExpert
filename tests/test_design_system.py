@@ -95,8 +95,14 @@ def test_piezas_css_de_marca_presentes():
     assert "--fx-primary" in WEB_CSS and "#2DD4BF" in WEB_CSS
     for clase in ("fx-top-bar", "fx-top-ic", "fx-footer", "fx-stepper",
                   "fx-step", "fx-band", "fx-metric", "fx-card", "fx-chip",
-                  "fx-alert", "fx-nav-label", "fx-auth-wrap"):
+                  "fx-alert", "fx-nav-label", "fx-auth-cover",
+                  "fx-auth-logo", "fx-auth-title", "fx-auth-sub",
+                  "fx-auth-fields", "fx-auth-options", "fx-auth-alt",
+                  "fx-auth-legal", "fx-prop"):
         assert ("." + clase) in WEB_CSS, f"Falta clase CSS .{clase}"
+    # Contenedores del acceso identificados por st.container(key=...)
+    assert 'st-key-auth_card' in WEB_CSS
+    assert 'st-key-auth_form' in WEB_CSS
     # El sidebar de Streamlit se estiliza por atributo (no clase controlable)
     assert '[data-testid="stSidebar"]' in WEB_CSS
 

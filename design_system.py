@@ -580,8 +580,11 @@ _CSS_BODY = """
     -webkit-font-smoothing: antialiased;
 }
 html, body, .stApp { background: var(--fx-bg); }
-.block-container { max-width: 1060px; padding-top: 1.1rem; padding-bottom: 4rem; }
+/* El header de Streamlit es visible (botón de re-expandir la sidebar),
+   por eso el contenido arranca por debajo de él, no debajo del header. */
+.block-container { max-width: 1060px; padding-top: 4.6rem; padding-bottom: 4rem; }
 #MainMenu, footer { display: none; }
+[data-testid="stMainBlockContainer"] { padding-top: 1rem; }
 #MainMenu, [data-testid="stMainMenu"], [data-testid="stAppDeployButton"],
 [data-testid="stToolbarActions"] { display: none; }
 /* OJO: NO ocultar stHeader/stToolbar/stExpandSidebarButton — ahí vive el
@@ -788,39 +791,127 @@ code, pre, kbd { font-family: var(--fx-mono) !important; }
 .fx-empty .ic { margin: 0 auto .6rem; }
 
 /* ── Auth / Landing ──────────────────────────────── */
-.fx-auth-wrap { min-height: 92vh; display: flex; align-items: center; justify-content: center;
-                padding: 1.4rem; }
-.fx-auth { display: grid; grid-template-columns: 1.05fr .95fr; width: 100%; max-width: 1060px;
-           min-height: 590px; border-radius: 22px; overflow: hidden;
-           border: 1px solid var(--fx-border);
-           background: var(--fx-bg-elev);
-           box-shadow: 0 30px 80px -30px rgba(0,0,0,.75); }
-.fx-auth-brand { padding: 2.6rem 2.4rem; display: flex; flex-direction: column;
-                 background:
-                    radial-gradient(600px 300px at 20% 0%, rgba(45,212,191,.16), transparent 60%),
-                    radial-gradient(500px 300px at 100% 100%, rgba(61,156,255,.12), transparent 60%),
-                    var(--fx-bg-2);
-                 border-right: 1px solid var(--fx-border); }
-.fx-auth-brand .tag { margin-top: 1.1rem; color: var(--fx-muted); font-size: 1.4rem;
-                      font-weight: 700; letter-spacing: -.01em; line-height: 1.25; }
-.fx-auth-brand .tag b { color: var(--fx-primary); }
-.fx-auth-brand .desc { color: var(--fx-muted); font-size: .88rem; line-height: 1.6;
-                       margin: .6rem 0 1.6rem; }
-.fx-prop { display: flex; gap: .8rem; align-items: center; padding: .62rem 0;
-           color: var(--fx-text); font-size: .9rem; }
-.fx-prop .ic { width: 38px; height: 38px; border-radius: 12px; flex: none;
+/* Tokens del acceso (ajustables desde aquí) */
+:root {
+    --fx-auth-card-radius: 28px;
+    --fx-auth-input-radius: 10px;
+    --fx-auth-input-h: 46px;
+    --fx-auth-gap: 16px;
+    --fx-auth-pad-y: 44px;
+    --fx-auth-pad-x: 48px;
+}
+
+/* Tarjeta = GRID de dos columnas reales (formulario | imagen).
+   Sin position:absolute: ambos lados fluyen en la rejilla. */
+[class*="st-key-auth_card"] {
+    width: min(1080px, 100%); margin: 0 auto;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch; min-height: 680px; overflow: hidden;
+    border-radius: var(--fx-auth-card-radius);
+    border: 1px solid var(--fx-border);
+    background: rgba(13,20,36,.9);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 34px 90px -34px rgba(0,0,0,.85); }
+
+/* Columna derecha: foto (object-fit: cover) o degradado de marca.
+   Para tu foto: assets/auth_cover.png|jpeg|webp (se incrusta desde Python). */
+[class*="st-key-auth_card"] > * { min-width: 0; }
+/* El panel derecho ocupa el 100% del alto de la fila de forma determinista:
+   su wrapper es un item del grid (se estira solo) → lo hacemos relative y
+   el cover se ancla con inset:0. Sin cascadas de height:100%. */
+[class*="st-key-auth_card"] > *:has(.fx-auth-cover) { position: relative; }
+[class*="st-key-auth_card"] > *:has(.fx-auth-cover) .stMarkdown,
+[class*="st-key-auth_card"] > *:has(.fx-auth-cover) .stMarkdownContainer { height: 100%; }
+.fx-auth-cover { position: absolute; inset: 0;
+    background-repeat: no-repeat; background-size: cover;
+    background-position: center; overflow: hidden;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 44px 40px; }
+.fx-auth-cover::before { content: ""; position: absolute; inset: 0;
+    background:
+        radial-gradient(520px 360px at 20% 12%, rgba(45,212,191,.30), transparent 62%),
+        radial-gradient(520px 380px at 92% 92%, rgba(61,156,255,.22), transparent 62%),
+        linear-gradient(205deg, #0B1526 0%, #102A3C 55%, #06251F 100%); }
+.fx-auth-cover::after { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(0deg, rgba(7,11,21,.95) 0%, rgba(7,11,21,.70) 40%,
+        rgba(13,20,36,.25) 75%, rgba(13,20,36,.40) 100%); }
+.fx-auth-cover > * { position: relative; z-index: 1; }
+.fx-auth-cover .tag { color: var(--fx-text); font-size: 1.75rem; font-weight: 700;
+                      letter-spacing: -.015em; line-height: 1.2; margin-bottom: 20px; }
+.fx-auth-cover .tag b { color: var(--fx-primary); }
+.fx-prop { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0;
+           color: var(--fx-text); font-size: .88rem; line-height: 1.45; }
+.fx-prop .ic { width: 34px; height: 34px; border-radius: 11px; flex: none;
                display: inline-flex; align-items: center; justify-content: center;
-               background: var(--fx-primary-soft); color: var(--fx-primary); }
-.fx-auth-brand .foot { margin-top: auto; color: var(--fx-faint); font-size: .76rem;
-                       line-height: 1.5; }
-.fx-auth-form { padding: 2.4rem 2.6rem; display: flex; flex-direction: column; }
-.fx-auth-form .title { font-size: 1.35rem; font-weight: 800; letter-spacing: -.01em;
-                       margin-bottom: .25rem; }
-.fx-auth-form .hint { color: var(--fx-muted); font-size: .86rem; margin-bottom: 1.3rem; }
-.fx-auth-form .ok-note { color: var(--fx-faint); font-size: .76rem; text-align: center;
-                         margin-top: .9rem; line-height: 1.5; }
-@media (max-width: 920px) { .fx-auth { grid-template-columns: 1fr; }
-                            .fx-auth-brand { display: none; } }
+               background: rgba(45,212,191,.15); color: var(--fx-primary); }
+.fx-auth-cover .foot { margin-top: 24px; color: var(--fx-faint); font-size: .72rem;
+                       line-height: 1.6; opacity: .85; }
+
+/* Columna izquierda: formulario */
+[class*="st-key-auth_form"] { padding: var(--fx-auth-pad-y) var(--fx-auth-pad-x);
+    display: flex; flex-direction: column; justify-content: center; }
+.fx-auth-logo { display: flex; margin-bottom: 26px; }
+.fx-auth-logo svg { height: 40px; }
+.fx-auth-title { font-size: 28px; font-weight: 600; letter-spacing: -.02em;
+                 color: var(--fx-text); line-height: 1.2; }
+.fx-auth-sub { font-size: 14px; color: var(--fx-muted); line-height: 1.55;
+               margin-top: 8px; }
+.fx-auth-fields { margin-top: 26px; display: flex; flex-direction: column; gap: 18px; }
+.fx-auth-options { display: flex; align-items: center; justify-content: space-between;
+                   gap: 16px; margin-top: 16px; font-size: 13px; color: var(--fx-muted); }
+.fx-auth-options a { color: var(--fx-primary); text-decoration: none; font-weight: 600;
+                     white-space: nowrap; }
+.fx-auth-options a:hover { text-decoration: underline; }
+.fx-auth-alt { text-align: center; font-size: 13px; color: var(--fx-muted); }
+.fx-auth-legal { text-align: center; font-size: 12px; color: var(--fx-faint);
+                 line-height: 1.8; margin-top: 4px; }
+.fx-auth-legal .note { display: block; max-width: 42ch; margin: 4px auto 0;
+                       font-size: 11.5px; color: var(--fx-muted); opacity: .85; }
+
+/* Inputs: 46px, sin recorte, foco teal */
+[class*="st-key-auth_form"] input[type="text"],
+[class*="st-key-auth_form"] input[type="password"] {
+    height: var(--fx-auth-input-h); min-height: var(--fx-auth-input-h);
+    padding: 0 14px; line-height: normal; overflow: visible;
+    border-radius: var(--fx-auth-input-radius);
+    background: var(--fx-bg-elev-2); border: 1px solid var(--fx-border);
+    color: var(--fx-text); font-size: 15px; }
+[class*="st-key-auth_form"] input:focus {
+    border-color: var(--fx-primary);
+    box-shadow: 0 0 0 3px rgba(45,212,191,.18); outline: none; }
+[class*="st-key-auth_form"] label { font-size: 13px; color: var(--fx-muted);
+                                    margin-bottom: 2px; }
+/* Espacio para el ojo nativo que Streamlit dibuja dentro del campo */
+[class*="st-key-auth_form"] input[type="password"] { padding-right: 42px; }
+
+/* Botón primario a ancho completo, 48px */
+[class*="st-key-auth_form"] button[data-testid="stBaseButton-primary"] {
+    height: 48px; border-radius: var(--fx-auth-input-radius);
+    font-size: 15px; font-weight: 650; margin-top: 4px; }
+[class*="st-key-auth_form"] button[data-testid="stBaseButton-tertiary"] {
+    height: 44px; border-radius: var(--fx-auth-input-radius);
+    font-size: 13.5px; color: var(--fx-muted) !important; }
+[class*="st-key-auth_form"] button[data-testid="stBaseButton-tertiary"]:hover {
+    color: var(--fx-primary) !important; }
+
+/* Checkbox de "recordarme" compacto */
+div[class*="st-key-auth_remember"] label { font-size: 13px; color: var(--fx-muted); }
+
+/* Responsive: una columna, imagen como banner superior */
+@media (max-width: 900px) {
+    [class*="st-key-auth_card"] { grid-template-columns: 1fr; min-height: 0; }
+    .fx-auth-cover { order: -1; position: relative; inset: auto;
+        height: 200px; min-height: 200px; padding: 26px 22px; }
+    .fx-auth-cover .prop, .fx-auth-cover .foot { display: none; }
+    .fx-auth-cover .tag { font-size: 1.3rem; margin-bottom: 0; }
+    [class*="st-key-auth_form"] { padding: 30px 22px; }
+    [class*="st-key-auth_form"] input[type="text"],
+    [class*="st-key-auth_form"] input[type="password"] { font-size: 16px; height: 48px; }
+}
+
+.fx-nav-label { font-size: .64rem; font-weight: 700; letter-spacing: .16em;
+                text-transform: uppercase; color: var(--fx-faint);
+                margin: .95rem .4rem .35rem; }
 
 /* ── Sidebar ─────────────────────────────────────── */
 [data-testid="stSidebar"] {
@@ -966,7 +1057,7 @@ summary { color: var(--fx-text) !important; font-weight: 650; font-size: .9rem; 
 
 /* ── Responsive ──────────────────────────────────── */
 @media (max-width: 900px) {
-    .block-container { max-width: 100%; padding: .8rem 1rem 3rem; }
+    .block-container { max-width: 100%; padding: 4.2rem 1rem 3rem; }
     .fx-hero { font-size: 1.6rem; }
     .fx-band { grid-template-columns: 1fr 1fr; }
 }
