@@ -1058,8 +1058,11 @@ def _exercise_dialog(slug: str, perfil=None) -> None:
     import html as _html
     esc = lambda s: _html.escape(str(s))
 
-    st.markdown(f'<div class="fx-h2">{esc(ficha.get("nombre", "Ejercicio"))}</div>',
-                unsafe_allow_html=True)
+    # El cierre lo pone el propio diálogo (X de la cabecera, esquina superior
+    # derecha): ese control está ARRIBA, así que el modal abre sin scrolls.
+    st.markdown(
+        f'<div class="fx-exdlg-title">{esc(ficha.get("nombre", "Ejercicio"))}</div>',
+        unsafe_allow_html=True)
 
     chips = _chip(ficha.get("categoria", "—"), "primary") + " " + \
         _chip(ficha.get("grupo_muscular", "—"), "info")
@@ -1114,9 +1117,6 @@ def _exercise_dialog(slug: str, perfil=None) -> None:
                       "Considera la regresión o consulta a un profesional."
         st.markdown(DS.alert_html("warn", "Precauciones", cuerpo),
                     unsafe_allow_html=True)
-
-    if st.button("Cerrar", key=f"exclose_{slug}", use_container_width=True):
-        st.rerun()
 
 
 def _toggle_dia(slug_dia: str) -> None:

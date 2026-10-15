@@ -1198,6 +1198,13 @@ div[class*="st-key-exbtn_"] button[data-testid="stBaseButton-tertiary"]:hover { 
 }
 
 /* Slot de imagen del ejercicio (lienzo integrado en la tarjeta) */
+/* Ficha de ejercicio (modal): scroll interno desde arriba */
+div[data-testid="stDialog"] { max-height: 92vh; overflow-y: auto;
+    scroll-behavior: auto; }
+/* Evita el "scroll anchoring" que dejaba el modal al final */
+div[data-testid="stDialog"] * { overflow-anchor: none; }
+.fx-exdlg-title { font-size: 1.35rem; font-weight: 800; letter-spacing: -.01em;
+    color: var(--fx-text); line-height: 1.2; }
 /* Lienzo blanco SOLO para la imagen del ejercicio (dentro del diálogo).
    Sin acotar, esta regla pintaba de blanco también las gráficas de
    matplotlib de Inicio/Progreso. */
@@ -1205,7 +1212,7 @@ div[data-testid="stDialog"] div[data-testid="stImage"] {
     background: #FFFFFF; border: 1px solid var(--fx-border);
     border-radius: 14px; padding: .9rem; margin-bottom: .9rem; }
 div[data-testid="stDialog"] div[data-testid="stImage"] img {
-    max-height: 420px; object-fit: contain; border-radius: 10px; }
+    max-height: 300px; object-fit: contain; border-radius: 10px; }
 .fx-eximg { aspect-ratio: 4 / 3; border-radius: 14px; }
 .fx-eximg--empty { background: var(--fx-bg-elev); border: 1.5px dashed var(--fx-border-2);
                    color: var(--fx-faint); display: flex; flex-direction: column;
